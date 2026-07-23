@@ -1,4 +1,4 @@
-# 🎾 tennis-scores
+# 🎾 Rally — tennis scorer
 
 Phone-first web app for friend groups to track tennis matches and rank players.
 No accounts — a group is a private space reached by one 6-char code. **Matches are the
@@ -16,14 +16,29 @@ uvicorn app:app --port 7860
 # open http://127.0.0.1:7860
 ```
 
-Tests: `pytest -q` (25 tests). Each core module also self-checks: `python ratings.py`,
+Tests: `pytest -q`. Each core module also self-checks: `python ratings.py`,
 `python logic.py`, `python scoring.py`, `python db.py`.
 
 Docker:
 
 ```bash
-docker build -t tennis-scores . && docker run -p 7860:7860 tennis-scores
+docker build -t rally . && docker run -p 7860:7860 --env-file .env rally
 ```
+
+## Admin (god-mode)
+
+A hidden console lives at **`/admin`** — no link points to it anywhere in the app.
+It is gated by one secret `ADMIN_KEY` (kept in `.env` / an env var, never shown in the UI;
+the value is recorded in `CONTEXT.md`). A wrong or missing key returns a generic *not found*.
+
+With the key, an admin sees a dashboard (totals + a card per group with code, public/private,
+counts, live dot, dates) and can: open any group as a member, toggle public/private,
+regenerate a group's code (invalidating the old one), rename or delete a group, rename or
+delete players (cascading their matches), and per match — edit sets/date/kind, delete
+instantly, force-finish a pending approval, or approve/cancel a delete request. Every
+destructive action needs a typed inline confirm, every action is written to an `admin_log`
+shown at the bottom of `/admin`, and every data change flows through the normal per-group
+rating rebuild.
 
 ## Groups & permissions
 

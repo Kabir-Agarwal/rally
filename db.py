@@ -74,6 +74,12 @@ CREATE TABLE IF NOT EXISTS approvals (
   approved_at TEXT,
   deadline TEXT
 );
+CREATE TABLE IF NOT EXISTS admin_log (
+  id INTEGER PRIMARY KEY,
+  at TEXT NOT NULL,
+  action TEXT NOT NULL,
+  target TEXT
+);
 """
 
 
@@ -129,6 +135,82 @@ def group_by_id(con, gid):
 def set_public(con, gid, is_public):
     con.execute("UPDATE groups SET is_public=? WHERE id=?", (1 if is_public else 0, gid))
     con.commit()
+
+
+def all_groups(con):
+    return con.execute("SELECT * FROM groups ORDER BY created_at DESC, id DESC").fetchall()
+
+
+def regen_code(con, gid):
+    """Assign a fresh unique code; the old code stops resolving immediately."""
+    code = gen_code(con)
+    con.execute("UPDATE groups SET code=? WHERE id=?", (code, gid))
+    con.commit()
+    return code
+
+
+def rename_group(con, gid, name):
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("name required")
+    con.execute("UPDATE groups SET name=? WHERE id=?", (name, gid))
+    con.commit()
+
+
+def _match_ids_of_group(con, gid):
+    return [r["id"] for r in con.execute("SELECT id FROM matches WHERE group_id=?", (gid,)).fetchall()]
+
+
+def _match_ids_of_player(con, pid):
+    return [r["match_id"] for r in
+            con.execute("SELECT DISTINCT match_id FROM match_players WHERE player_id=?", (pid,)).fetchall()]
+
+
+def _delete_matches(con, mids):
+    for mid in mids:
+        for t in ("match_players", "match_sets", "tt_games", "point_logs", "approvals"):
+            con.execute(f"DELETE FROM {t} WHERE match_id=?", (mid,))
+        con.execute("DELETE FROM matches WHERE id=?", (mid,))
+
+
+def delete_group(con, gid):
+    """Cascade-delete a group and ONLY its own data."""
+    _delete_matches(con, _match_ids_of_group(con, gid))
+    con.execute("DELETE FROM players WHERE group_id=?", (gid,))
+    con.execute("DELETE FROM groups WHERE id=?", (gid,))
+    con.commit()
+
+
+def rename_player(con, pid, name):
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("name required")
+    try:
+        con.execute("UPDATE players SET name=? WHERE id=?", (name, pid))
+        con.commit()
+    except sqlite3.IntegrityError:
+        raise ValueError("duplicate name in this group")
+
+
+def delete_player(con, pid):
+    """Delete a player and cascade the matches they played (their group only)."""
+    _delete_matches(con, _match_ids_of_player(con, pid))
+    con.execute("DELETE FROM players WHERE id=?", (pid,))
+    con.commit()
+
+
+def player_row(con, pid):
+    return con.execute("SELECT * FROM players WHERE id=?", (pid,)).fetchone()
+
+
+# --- admin log ------------------------------------------------------------
+def log_admin(con, action, target=""):
+    con.execute("INSERT INTO admin_log(at, action, target) VALUES(?,?,?)", (now(), action, target))
+    con.commit()
+
+
+def admin_logs(con, limit=100):
+    return con.execute("SELECT * FROM admin_log ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
 
 
 # --- players --------------------------------------------------------------

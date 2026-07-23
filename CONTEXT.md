@@ -1,7 +1,10 @@
-# CONTEXT.md — tennis-scores
+# CONTEXT.md — Rally (tennis scorer)
 
 ## State
-Working, tested, verified end-to-end in a browser. Built locally, **not deployed**.
+Working, tested, verified end-to-end. Built locally, **not deployed**.
+Product name is **Rally**, subtitle **"tennis scorer"** (header, titles, README, Docker labels).
+No personal names anywhere in UI/README/comments/seeds (seeds are generic: Ann/Bob/Cara/Dan).
+34 pytest tests green (25 base + 9 admin).
 
 - `ratings.py` — pure rating engine (singles/doubles/pairs/TT). `python ratings.py` → OK.
 - `db.py` — SQLite schema + helpers + per-group rating rebuild. `python db.py` → OK.
@@ -70,6 +73,29 @@ SQLite file `tennis.db` is created on first run (gitignored).
   so the two entry modes never fight for a single match.
 - **Serve/story stats** cover hold%/break%, break-points-saved, deuce points, longest streak
   and a coarse set-comeback figure; they are display-only and never affect ratings.
+
+## Admin god-mode (Task A)
+- Hidden console at **`/admin`** — no link from any user-facing page. Gated by one secret
+  `ADMIN_KEY`. Wrong/missing key → generic 404 ("not found"), revealing nothing.
+- **ADMIN_KEY location:** `.env` (gitignored) as `ADMIN_KEY=...`, also settable via env var.
+  App reads it in `app._load_admin_key()` (env var wins, else `.env`, else a dev default).
+  Current dev key is recorded below.
+  **ADMIN_KEY = `QvfdtcNrTAkDyaZ9iV9BIsoswaHoAnwL6cFUkuD8W8StsOLm`** (rotate for production).
+- Client keeps the key in `localStorage` (`rally_admin_key`) and sends it as the
+  `X-Admin-Key` header on every admin request (`static/admin.js`). Inline key form, no popups.
+- Capabilities: dashboard totals (groups/players/matches/live) + per-group cards
+  (name, code, public/private, counts, live dot, created, last activity); per group —
+  open as member, toggle public/private, regenerate code (old code dies), rename, delete
+  (typed-name confirm, cascades that group only); players — rename, delete (typed confirm,
+  cascades their matches); matches — edit sets/date/kind, delete instantly (bypasses
+  approval), force-finish a pending approval, approve/cancel a delete request; create group.
+- Every destructive action needs a typed inline confirm. Every admin action appends to the
+  new `admin_log` table (ts, action, target), shown at the bottom of `/admin`. All changes
+  flow through the normal per-group rating rebuild (recomputed on read, so never stale).
+- Admin data helpers live in `db.py` (rename/regen/delete/cascade + `log_admin`/`admin_logs`);
+  bypass lifecycle ops in `logic.py` (`admin_delete_match`, `admin_force_finish`,
+  `admin_approve_delete`, `admin_cancel_delete`, `admin_edit_match`); routes in `app.py`
+  under `/admin/api/...`, each guarded by `require_admin`.
 
 ## Out of scope (v2 parking lot)
 Accounts; async challenges + duo requests; individual doubles return attribution (deuce/ad

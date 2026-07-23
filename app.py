@@ -1,11 +1,14 @@
-"""tennis-scores — FastAPI app. Phone-first, no accounts, groups reached by 6-char code.
+"""Rally — tennis scorer. FastAPI app. Phone-first, no accounts, groups reached by 6-char code.
 
 The group code in the URL is the capability: possessing it = member = can write.
 # ponytail: no server-side session/accounts. Code = auth. Public/private governs the
 # global (cross-group) feeds only; the read-only "watch" UX is client state. Add real
 # auth only if groups ever need to exclude code-holders — out of scope (v2).
+
+Admin god-mode lives behind one secret ADMIN_KEY (from .env / env var). See CONTEXT.md.
 """
 from __future__ import annotations
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, Request, HTTPException
@@ -20,11 +23,27 @@ import ratings
 from ratings import START
 
 BASE = Path(__file__).parent
-app = FastAPI(title="tennis-scores")
+app = FastAPI(title="Rally")
 app.mount("/static", StaticFiles(directory=BASE / "static"), name="static")
 templates = Jinja2Templates(directory=BASE / "templates")
 
 db.init_db()
+
+
+def _load_admin_key():
+    # ponytail: manual .env read, no python-dotenv dependency for one value.
+    v = os.environ.get("ADMIN_KEY")
+    if v:
+        return v.strip()
+    env = BASE / ".env"
+    if env.exists():
+        for line in env.read_text(encoding="utf-8").splitlines():
+            if line.strip().startswith("ADMIN_KEY="):
+                return line.split("=", 1)[1].strip()
+    return "dev-admin-key-change-me"
+
+
+ADMIN_KEY = _load_admin_key()
 
 
 # --- helpers --------------------------------------------------------------
@@ -527,6 +546,240 @@ def api_global_leaderboard(mode: str = "singles"):
     ranked, prov = ranked_and_provisional(rows)
     con.close()
     return {"ranked": ranked, "provisional": prov}
+
+
+# ==========================================================================
+# ADMIN GOD-MODE — one secret key, no link anywhere in the user-facing app.
+# ==========================================================================
+def require_admin(request: Request):
+    """Gate every admin endpoint. Wrong/missing key -> generic 404 (reveals nothing)."""
+    key = request.headers.get("x-admin-key") or request.query_params.get("key") or ""
+    if not key or key != ADMIN_KEY:
+        raise HTTPException(404, "Not Found")
+
+
+async def _admin_body(request: Request):
+    require_admin(request)
+    try:
+        return await request.json()
+    except Exception:
+        return {}
+
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin_page(request: Request):
+    # The shell is inert without the key; all data endpoints enforce it.
+    return templates.TemplateResponse(request, "admin.html", {})
+
+
+def _group_card(con, g):
+    gid = g["id"]
+    players = con.execute("SELECT COUNT(*) c FROM players WHERE group_id=?", (gid,)).fetchone()["c"]
+    matches = con.execute("SELECT COUNT(*) c FROM matches WHERE group_id=?", (gid,)).fetchone()["c"]
+    live = con.execute("SELECT COUNT(*) c FROM matches WHERE group_id=? AND status='live'", (gid,)).fetchone()["c"]
+    last = con.execute(
+        "SELECT MAX(COALESCE(finished_at, started_at, created_at)) t FROM matches WHERE group_id=?",
+        (gid,)).fetchone()["t"]
+    return {"id": gid, "name": g["name"], "code": g["code"], "is_public": bool(g["is_public"]),
+            "players": players, "matches": matches, "live": live,
+            "created_at": g["created_at"], "last_activity": last}
+
+
+@app.get("/admin/api/dashboard")
+def admin_dashboard(request: Request):
+    require_admin(request)
+    con = get_con()
+    groups = [_group_card(con, g) for g in db.all_groups(con)]
+    totals = {
+        "groups": con.execute("SELECT COUNT(*) c FROM groups").fetchone()["c"],
+        "players": con.execute("SELECT COUNT(*) c FROM players").fetchone()["c"],
+        "matches": con.execute("SELECT COUNT(*) c FROM matches").fetchone()["c"],
+        "live": con.execute("SELECT COUNT(*) c FROM matches WHERE status='live'").fetchone()["c"],
+    }
+    logs = [{"at": r["at"], "action": r["action"], "target": r["target"]} for r in db.admin_logs(con)]
+    con.close()
+    return {"totals": totals, "groups": groups, "log": logs}
+
+
+@app.get("/admin/api/group/{gid}")
+def admin_group_detail(request: Request, gid: int):
+    require_admin(request)
+    con = get_con()
+    g = db.group_by_id(con, gid)
+    if not g:
+        con.close()
+        raise HTTPException(404, "Not Found")
+    players = [{"id": p["id"], "name": p["name"]} for p in db.players_of(con, gid)]
+    ms = con.execute(
+        "SELECT * FROM matches WHERE group_id=? ORDER BY COALESCE(finished_at, created_at) DESC, id DESC",
+        (gid,)).fetchall()
+    matches = []
+    for m in ms:
+        v = match_view(con, m)
+        if m["status"] in ("pending_approval", "delete_requested"):
+            v["approvals"] = [{"name": a["name"], "approved": bool(a["approved_at"])}
+                              for a in logic.approvals_of(con, m["id"])]
+        matches.append(v)
+    card = _group_card(con, g)
+    con.close()
+    return {"group": card, "players": players, "matches": matches}
+
+
+def _admin_ok(con, action, target):
+    db.log_admin(con, action, target)
+    con.close()
+    return {"ok": True}
+
+
+@app.post("/admin/api/group/create")
+async def admin_group_create(request: Request):
+    d = await _admin_body(request)
+    name = (d.get("name") or "").strip()
+    if not name:
+        return JSONResponse({"error": "name required"}, 400)
+    con = get_con()
+    gid, code = db.create_group(con, name)
+    db.log_admin(con, "group.create", f"{name} [{code}]")
+    con.close()
+    return {"id": gid, "code": code, "name": name}
+
+
+@app.post("/admin/api/group/{gid}/public")
+async def admin_group_public(request: Request, gid: int):
+    d = await _admin_body(request)
+    con = get_con()
+    db.set_public(con, gid, bool(d.get("is_public")))
+    return _admin_ok(con, "group.public", f"gid={gid} -> {bool(d.get('is_public'))}")
+
+
+@app.post("/admin/api/group/{gid}/regen")
+async def admin_group_regen(request: Request, gid: int):
+    await _admin_body(request)
+    con = get_con()
+    g = db.group_by_id(con, gid)
+    if not g:
+        con.close()
+        raise HTTPException(404, "Not Found")
+    old = g["code"]
+    code = db.regen_code(con, gid)
+    db.log_admin(con, "group.regen_code", f"gid={gid} {old} -> {code}")
+    con.close()
+    return {"code": code}
+
+
+@app.post("/admin/api/group/{gid}/rename")
+async def admin_group_rename(request: Request, gid: int):
+    d = await _admin_body(request)
+    con = get_con()
+    try:
+        db.rename_group(con, gid, d.get("name", ""))
+    except ValueError as e:
+        con.close()
+        return JSONResponse({"error": str(e)}, 400)
+    return _admin_ok(con, "group.rename", f"gid={gid} -> {d.get('name')}")
+
+
+@app.post("/admin/api/group/{gid}/delete")
+async def admin_group_delete(request: Request, gid: int):
+    d = await _admin_body(request)
+    con = get_con()
+    g = db.group_by_id(con, gid)
+    if not g:
+        con.close()
+        raise HTTPException(404, "Not Found")
+    if (d.get("confirm") or "").strip() != g["name"]:
+        con.close()
+        return JSONResponse({"error": "type the exact group name to confirm"}, 400)
+    db.delete_group(con, gid)
+    return _admin_ok(con, "group.delete", f"gid={gid} [{g['name']}]")
+
+
+@app.post("/admin/api/player/{pid}/rename")
+async def admin_player_rename(request: Request, pid: int):
+    d = await _admin_body(request)
+    con = get_con()
+    try:
+        db.rename_player(con, pid, d.get("name", ""))
+    except ValueError as e:
+        con.close()
+        return JSONResponse({"error": str(e)}, 400)
+    return _admin_ok(con, "player.rename", f"pid={pid} -> {d.get('name')}")
+
+
+@app.post("/admin/api/player/{pid}/delete")
+async def admin_player_delete(request: Request, pid: int):
+    d = await _admin_body(request)
+    con = get_con()
+    p = db.player_row(con, pid)
+    if not p:
+        con.close()
+        raise HTTPException(404, "Not Found")
+    if (d.get("confirm") or "").strip() != p["name"]:
+        con.close()
+        return JSONResponse({"error": "type the exact player name to confirm"}, 400)
+    db.delete_player(con, pid)
+    return _admin_ok(con, "player.delete", f"pid={pid} [{p['name']}]")
+
+
+@app.post("/admin/api/match/{mid}/edit")
+async def admin_match_edit(request: Request, mid: int):
+    d = await _admin_body(request)
+    con = get_con()
+    try:
+        logic.admin_edit_match(con, mid, sets=d.get("sets"), played_on=d.get("played_on"),
+                               kind=d.get("kind"))
+    except ValueError as e:
+        con.close()
+        return JSONResponse({"error": str(e)}, 400)
+    return _admin_ok(con, "match.edit", f"mid={mid}")
+
+
+@app.post("/admin/api/match/{mid}/delete")
+async def admin_match_delete(request: Request, mid: int):
+    await _admin_body(request)
+    con = get_con()
+    try:
+        logic.admin_delete_match(con, mid)
+    except ValueError as e:
+        con.close()
+        return JSONResponse({"error": str(e)}, 400)
+    return _admin_ok(con, "match.delete", f"mid={mid}")
+
+
+@app.post("/admin/api/match/{mid}/force-finish")
+async def admin_match_force_finish(request: Request, mid: int):
+    await _admin_body(request)
+    con = get_con()
+    try:
+        logic.admin_force_finish(con, mid)
+    except ValueError as e:
+        con.close()
+        return JSONResponse({"error": str(e)}, 400)
+    return _admin_ok(con, "match.force_finish", f"mid={mid}")
+
+
+@app.post("/admin/api/match/{mid}/approve-delete")
+async def admin_match_approve_delete(request: Request, mid: int):
+    await _admin_body(request)
+    con = get_con()
+    try:
+        logic.admin_approve_delete(con, mid)
+    except ValueError as e:
+        con.close()
+        return JSONResponse({"error": str(e)}, 400)
+    return _admin_ok(con, "match.approve_delete", f"mid={mid}")
+
+
+@app.post("/admin/api/match/{mid}/cancel-delete")
+async def admin_match_cancel_delete(request: Request, mid: int):
+    await _admin_body(request)
+    con = get_con()
+    try:
+        logic.admin_cancel_delete(con, mid)
+    except ValueError as e:
+        con.close()
+        return JSONResponse({"error": str(e)}, 400)
+    return _admin_ok(con, "match.cancel_delete", f"mid={mid}")
 
 
 if __name__ == "__main__":

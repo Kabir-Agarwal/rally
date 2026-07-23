@@ -206,6 +206,68 @@ def delete_match(con, mid, requester_player_id):
     raise ValueError("cannot delete")
 
 
+# --- admin god-mode (bypasses the approval requirement) -------------------
+def admin_delete_match(con, mid):
+    """Instant hard delete of any match, regardless of status."""
+    if not db.match_row(con, mid):
+        raise ValueError("no such match")
+    _hard_delete(con, mid)
+
+
+def admin_force_finish(con, mid):
+    """Force a pending_approval match straight to finished + rated, now."""
+    m = db.match_row(con, mid)
+    if not m:
+        raise ValueError("no such match")
+    if m["status"] != "pending_approval":
+        raise ValueError("match is not awaiting approval")
+    con.execute("UPDATE matches SET status='finished', finished_at=COALESCE(finished_at,?) WHERE id=?",
+                (now(), mid))
+    con.execute("DELETE FROM approvals WHERE match_id=?", (mid,))
+    con.commit()
+
+
+def admin_approve_delete(con, mid):
+    """Execute a pending delete request immediately (no all-player approval needed)."""
+    m = db.match_row(con, mid)
+    if not m or m["status"] != "delete_requested":
+        raise ValueError("no pending delete request")
+    _hard_delete(con, mid)
+
+
+def admin_cancel_delete(con, mid):
+    """Cancel a delete request; the match returns to finished and keeps counting."""
+    m = db.match_row(con, mid)
+    if not m or m["status"] != "delete_requested":
+        raise ValueError("no pending delete request")
+    con.execute("UPDATE matches SET status='finished', finished_at=COALESCE(finished_at,?) WHERE id=?",
+                (now(), mid))
+    con.execute("DELETE FROM approvals WHERE match_id=?", (mid,))
+    con.commit()
+
+
+def admin_edit_match(con, mid, sets=None, played_on=None, kind=None):
+    """Edit any match's sets, date, and/or kind. Kind only if it fits the roster."""
+    m = db.match_row(con, mid)
+    if not m:
+        raise ValueError("no such match")
+    if kind and kind != m["kind"]:
+        s1, s2, rot = db.sides(con, mid)
+        ok = ((kind == "singles" and len(s1) == 1 and len(s2) == 1)
+              or (kind == "doubles" and len(s1) == 2 and len(s2) == 2)
+              or (kind == "tt" and len(rot) == 3))
+        if not ok:
+            raise ValueError("kind does not match this match's players")
+        con.execute("UPDATE matches SET kind=? WHERE id=?", (kind, mid))
+    target_kind = kind or m["kind"]
+    if sets is not None and target_kind != "tt":
+        clean = validate_sets([(int(a), int(b)) for a, b in sets])
+        _write_sets(con, mid, clean)
+    if played_on:
+        con.execute("UPDATE matches SET played_on=? WHERE id=?", (played_on, mid))
+    con.commit()
+
+
 if __name__ == "__main__":
     con = db.connect(":memory:")
     con.executescript(db.SCHEMA)

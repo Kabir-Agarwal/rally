@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Rally</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="app">
+  <div class="hd">
+    <div class="name">🎾 Rally <span style="opacity:.8;font-size:13px">· admin</span></div>
+    <div class="sub" id="adminSub">god-mode console</div>
+    <div class="court-line"></div>
+  </div>
+
+  <div id="keyGate" class="card">
+    <div style="font-weight:800;margin-bottom:8px">Admin key</div>
+    <div class="row">
+      <input id="adminKey" type="password" placeholder="enter key" autocomplete="off">
+      <button class="btn sm" onclick="saveKey()">Unlock</button>
+    </div>
+    <div class="err" id="keyErr"></div>
+  </div>
+
+  <div id="adminBody" style="display:none">
+    <div id="totals" class="card"></div>
+    <div class="row" style="margin:0 16px 4px">
+      <input id="newGroupName" placeholder="new group name">
+      <button class="btn sm" onclick="adminCreateGroup()">Create group</button>
+    </div>
+    <div class="err" id="createErr" style="margin:0 16px"></div>
+    <div class="sec-title">Groups</div>
+    <div id="groups"></div>
+    <div class="sec-title">Admin log</div>
+    <div id="adminLog" class="card" style="padding:6px 12px"></div>
+  </div>
+</div>
+<script src="/static/admin.js"></script>
+</body>
+</html>

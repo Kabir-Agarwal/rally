@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>tennis-scores</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="app">
+  <div class="hd">
+    <div class="name">🎾 tennis-scores</div>
+    <div class="sub">track matches · rank your friends</div>
+    <div class="court-line"></div>
+  </div>
+
+  <div id="myGroups"></div>
+
+  <div class="card">
+    <div style="font-weight:800;margin-bottom:8px">Join a group</div>
+    <div class="row">
+      <input id="joinCode" maxlength="6" placeholder="6-char code" style="text-transform:uppercase">
+      <button class="btn sm clay" onclick="doJoin()">Join</button>
+    </div>
+    <div class="err" id="joinErr"></div>
+  </div>
+
+  <div class="card">
+    <div style="font-weight:800;margin-bottom:8px">Create a group</div>
+    <div id="createForm">
+      <div class="row">
+        <input id="grpName" placeholder="group name">
+        <button class="btn sm" onclick="doCreate()">Create</button>
+      </div>
+      <div class="err" id="createErr"></div>
+    </div>
+    <div id="createDone" style="display:none">
+      <div class="muted">Share this code — anyone who enters it can update scores:</div>
+      <div class="bignum" id="newCode"></div>
+      <button class="btn" style="margin-top:10px" id="enterBtn">Enter group ▶</button>
+    </div>
+  </div>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>

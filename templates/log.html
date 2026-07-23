@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block content %}
+<div id="gate"></div>
+
+<div class="sec-title">Update a live match</div>
+<div id="liveEditors"><div class="empty">No live matches. Start one below.</div></div>
+
+<div class="sec-title">Start a new match</div>
+<div class="card">
+  <div class="seg" id="kindSeg" style="margin:0 0 10px">
+    <button class="on" data-kind="singles" onclick="setKind(this)">Singles</button>
+    <button data-kind="doubles" onclick="setKind(this)">Doubles</button>
+    <button data-kind="tt" onclick="setKind(this)">Triple threat</button>
+  </div>
+  <div class="muted" id="pickHint">Pick 2 players in serving order.</div>
+  <div class="chips" id="picker"></div>
+  <div class="row" style="margin-top:8px">
+    <input id="newPlayerName" placeholder="+ New player">
+    <button class="btn sm ghost" onclick="addPlayer()">Add</button>
+  </div>
+  <div class="err" id="pickErr"></div>
+  <div id="winProb" class="note"></div>
+  <button class="btn" style="margin-top:10px" onclick="startMatch()">▶ Start</button>
+</div>
+
+<div class="sec-title">Already played? Final score</div>
+<div class="card" id="playedCard">
+  <div class="muted">Same pickers, then enter the final sets.</div>
+  <button class="btn ghost sm" style="margin-top:8px" onclick="togglePlayed()">Enter a past result</button>
+  <div id="playedBody" style="display:none"></div>
+</div>
+
+<script>window.PAGE="log"; window.PLAYERS={{ players|tojson }};</script>
+{% endblock %}

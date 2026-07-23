@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div style="font-weight:800">This group</div>
+  <div class="bignum">{{ g.code }}</div>
+  <div class="note">Anyone with this code can watch and update.</div>
+  <button id="pubBtn" class="big-toggle {{ 'pub' if g.is_public else 'priv' }}" style="margin-top:12px"
+          onclick="togglePublic()">
+    {{ '🌐 Public — on global leaderboard' if g.is_public else '🔒 Private — members only' }}
+  </button>
+  <div class="note" id="pubNote">{{ 'Anyone with the link can watch; your players show globally.' if g.is_public else 'Invisible. Only code-holders see it.' }}</div>
+</div>
+
+<div class="card">
+  <div style="font-weight:800;margin-bottom:6px">Which player am I?</div>
+  <div class="chips" id="whoPicker"></div>
+</div>
+
+<div class="sec-title">Your groups</div>
+<div id="groupsList" class="card" style="padding:4px 4px"></div>
+
+<div class="card">
+  <div style="font-weight:800;margin-bottom:6px">Create another group</div>
+  <div class="row"><input id="gName2" placeholder="group name"><button class="btn sm" onclick="createFromTab()">Create</button></div>
+  <div id="createOut" class="note"></div>
+  <div style="font-weight:800;margin:12px 0 6px">Join by code</div>
+  <div class="row"><input id="jCode2" maxlength="6" placeholder="code" style="text-transform:uppercase"><button class="btn sm clay" onclick="joinFromTab()">Join</button></div>
+  <div id="joinOut2" class="err"></div>
+</div>
+<script>window.PAGE="groups"; window.PLAYERS={{ players|tojson }};</script>
+{% endblock %}

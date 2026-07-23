@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="sec-title">Live</div>
+<div id="lbLive" class="card" style="padding:8px 12px"><span class="muted">No live matches.</span></div>
+
+<div class="row" style="margin:10px 16px 0"><input id="lbSearch" placeholder="Search players…" oninput="renderLeaderboard()"></div>
+<div class="seg" id="lbScope">
+  <button class="on" data-scope="group" onclick="setScope(this)">This group</button>
+  <button data-scope="everyone" onclick="setScope(this)">Everyone</button>
+</div>
+<div class="note" id="scopeNote" style="margin:0 16px"></div>
+<div class="seg" id="lbMode">
+  <button class="on" data-mode="singles" onclick="setMode(this)">Singles</button>
+  <button data-mode="doubles" onclick="setMode(this)">Doubles</button>
+</div>
+
+<div id="youCard"></div>
+<div id="lbList" class="card" style="padding:4px 4px"><div class="empty">Loading…</div></div>
+<div class="sec-title">Provisional (N of 5)</div>
+<div id="lbProv" class="card" style="padding:4px 4px"><div class="empty">—</div></div>
+<script>window.PAGE="leaderboard";</script>
+{% endblock %}

@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>{% block title %}tennis-scores{% endblock %}</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="app">
+{% if g is defined %}
+  <div class="hd">
+    <div class="name" onclick="openSwitcher()">🎾 {{ g.name }} <span class="chev">▾</span></div>
+    <div class="sub">code <b>{{ g.code }}</b>{% if g.is_public %} · public{% else %} · private{% endif %}</div>
+    <div class="court-line"></div>
+  </div>
+{% endif %}
+
+{% block content %}{% endblock %}
+
+{% if g is defined %}
+  <div class="switcher" id="switcher" onclick="if(event.target.id=='switcher')closeSwitcher()">
+    <div class="sheet2">
+      <div style="font-weight:800;margin:4px 0 8px">Your groups</div>
+      <div id="switcherList" class="muted">…</div>
+    </div>
+  </div>
+  <nav class="tabs">
+    {% set t = tab|default('live') %}
+    <a href="/g/{{ code }}/live" class="{{ 'on' if t=='live' }}"><span class="ic">🎾</span>Live</a>
+    <a href="/g/{{ code }}/leaderboard" class="{{ 'on' if t=='leaderboard' }}"><span class="ic">🏆</span>Ranks</a>
+    <a href="/g/{{ code }}/log" class="{{ 'on' if t=='log' }}"><span class="ic">✏️</span>Log</a>
+    <a href="/g/{{ code }}/groups" class="{{ 'on' if t=='groups' }}"><span class="ic">👥</span>Groups</a>
+    <a href="/g/{{ code }}/history" class="{{ 'on' if t=='history' }}"><span class="ic">📜</span>History</a>
+  </nav>
+  <script>window.GROUP={code:"{{ g.code }}",name:"{{ g.name|e }}",is_public:{{ 'true' if g.is_public else 'false' }}};</script>
+{% endif %}
+<script src="/static/app.js"></script>
+</div>
+</body>
+</html>

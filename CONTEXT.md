@@ -79,8 +79,7 @@ SQLite file `tennis.db` is created on first run (gitignored).
   `ADMIN_KEY`. Wrong/missing key → generic 404 ("not found"), revealing nothing.
 - **ADMIN_KEY location:** `.env` (gitignored) as `ADMIN_KEY=...`, also settable via env var.
   App reads it in `app._load_admin_key()` (env var wins, else `.env`, else a dev default).
-  Current dev key is recorded below.
-  **ADMIN_KEY = `QvfdtcNrTAkDyaZ9iV9BIsoswaHoAnwL6cFUkuD8W8StsOLm`** (rotate for production).
+  ADMIN_KEY: kept in .env (untracked), rotated after exposure check.
 - Client keeps the key in `localStorage` (`rally_admin_key`) and sends it as the
   `X-Admin-Key` header on every admin request (`static/admin.js`). Inline key form, no popups.
 - Capabilities: dashboard totals (groups/players/matches/live) + per-group cards

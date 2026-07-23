@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "tennis-scores",
+      "runtimeExecutable": "C:/Users/LENOVO/Desktop/tennis-scores/.venv/Scripts/python.exe",
+      "runtimeArgs": ["-m", "uvicorn", "app:app", "--host", "127.0.0.1", "--port", "7860", "--app-dir", "C:/Users/LENOVO/Desktop/tennis-scores"],
+      "port": 7860
+    }
+  ]
+}

@@ -143,7 +143,7 @@ def public_groups(con, exclude_id=None):
 # --- landing --------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
 def landing(request: Request):
-    return templates.TemplateResponse("landing.html", {"request": request})
+    return templates.TemplateResponse(request, "landing.html", {})
 
 
 @app.post("/api/group/create")
@@ -177,7 +177,7 @@ def _page(request, code, tab, extra=None):
     if extra:
         ctx.update(extra(con, g))
     con.close()
-    return templates.TemplateResponse(f"{tab}.html", ctx)
+    return templates.TemplateResponse(request, f"{tab}.html", ctx)
 
 
 @app.get("/g/{code}", response_class=HTMLResponse)
@@ -224,8 +224,8 @@ def page_player(request: Request, code: str, pid: int):
         raise HTTPException(404, "player not found")
     data = player_payload(con, g, pid)
     con.close()
-    return templates.TemplateResponse("player.html",
-                                      {"request": request, "g": dict(g), "code": code,
+    return templates.TemplateResponse(request, "player.html",
+                                      {"g": dict(g), "code": code,
                                        "tab": "leaderboard", "p": data})
 
 

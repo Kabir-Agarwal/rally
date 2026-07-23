@@ -25,6 +25,25 @@ Docker:
 docker build -t rally . && docker run -p 7860:7860 --env-file .env rally
 ```
 
+## Database
+
+Rally picks its backend from `DATABASE_URL`:
+
+- **unset** → the local SQLite file `tennis.db` (default; local dev + tests unchanged).
+- **`postgres://…` / `postgresql://…`** → Postgres (via SQLAlchemy + `psycopg`).
+
+The schema (including `admin_log`) is defined once in `schema.py`; the rebuild-from-history
+rating logic is identical on both backends.
+
+## Deploy
+
+Deploy on **Render** as a web service built from this repo's `Dockerfile`. Set two env vars:
+
+- `DATABASE_URL` — your Supabase Postgres connection string.
+- `ADMIN_KEY` — the god-mode admin secret.
+
+Nothing else is required.
+
 ## Admin (god-mode)
 
 A hidden console lives at **`/admin`** — no link points to it anywhere in the app.

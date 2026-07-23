@@ -4,7 +4,7 @@
 Working, tested, verified end-to-end. Built locally, **not deployed**.
 Product name is **Rally**, subtitle **"tennis scorer"** (header, titles, README, Docker labels).
 No personal names anywhere in UI/README/comments/seeds (seeds are generic: Ann/Bob/Cara/Dan).
-34 pytest tests green (25 base + 9 admin).
+38 pytest tests green (25 base + 9 admin + 4 backend).
 
 - `ratings.py` — pure rating engine (singles/doubles/pairs/TT). `python ratings.py` → OK.
 - `db.py` — SQLite schema + helpers + per-group rating rebuild. `python db.py` → OK.
@@ -96,6 +96,26 @@ SQLite file `tennis.db` is created on first run (gitignored).
   bypass lifecycle ops in `logic.py` (`admin_delete_match`, `admin_force_finish`,
   `admin_approve_delete`, `admin_cancel_delete`, `admin_edit_match`); routes in `app.py`
   under `/admin/api/...`, each guarded by `require_admin`.
+
+## Production-safe database (Task B)
+- Backend is chosen by **`DATABASE_URL`**: unset → local SQLite `tennis.db` (default, dev +
+  all tests unchanged); `postgres://…`/`postgresql://…` → Postgres via SQLAlchemy + `psycopg`.
+- Single cross-dialect schema in **`schema.py`** (SQLAlchemy Core `MetaData`, incl. `admin_log`);
+  Postgres tables are created with `metadata.create_all()`. SQLite still bootstraps from the
+  raw `db.SCHEMA` string (the in-memory test helpers depend on it); a drift-guard test keeps
+  the two in sync (same tables + columns). Case-insensitive player uniqueness is a functional
+  unique index on `lower(name)` in `schema.py` (mirrors SQLite's `COLLATE NOCASE`).
+- Queries are shared: a ~40-line DBAPI shim in `db.py` (`_PGConn`/`_PGCursor`/`_Row`) adapts
+  psycopg to the `sqlite3.Row`/cursor interface the existing raw SQL uses — `?`→`%s`, rows
+  that support both `r["c"]` and `r[0]`, and `lastrowid` via `SELECT lastval()`. The SQLite
+  connection path is byte-for-byte the original. `INTEGRITY_ERRORS` catches dup-name violations
+  on either backend. Rebuild-from-history logic is unchanged and identical on both.
+- Requirements add `sqlalchemy` + `psycopg[binary]`. `psycopg` is imported lazily/guarded, so
+  SQLite dev + tests run without it installed.
+- **Deploy:** Render web service from the repo `Dockerfile`; env vars `DATABASE_URL` (Supabase
+  Postgres) and `ADMIN_KEY`. Nothing else. Postgres correctness is wired but not exercised
+  live here — the smoke test `test_db_backend.py` compiles the schema for the Postgres dialect
+  (no live PG), and asserts the metadata matches the SQLite SCHEMA.
 
 ## Out of scope (v2 parking lot)
 Accounts; async challenges + duo requests; individual doubles return attribution (deuce/ad

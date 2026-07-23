@@ -6,6 +6,7 @@ Ratings are recomputed from finished matches on read (see ratings.rebuild).
 # group's match count ever makes per-request rebuild measurably slow.
 """
 from __future__ import annotations
+import os
 import sqlite3
 import secrets
 import string
@@ -18,6 +19,14 @@ DB_PATH = Path(__file__).parent / "tennis.db"
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # A-Z2-9, no ambiguous 0/O/1/I
 APPROVAL_HOURS = 24
 RATING_STATUSES = ("finished", "delete_requested")  # both count toward ratings
+
+# Production-safe backend: DATABASE_URL (Postgres) if set, else the local SQLite file.
+# The SQLite path is byte-for-byte the original — local dev + all tests are unchanged.
+DATABASE_URL = os.environ.get("DATABASE_URL") or ""
+
+
+def _is_pg():
+    return DATABASE_URL.startswith("postgres://") or DATABASE_URL.startswith("postgresql")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS groups (
@@ -91,7 +100,92 @@ def deadline_24h():
     return (datetime.utcnow() + timedelta(hours=APPROVAL_HOURS)).isoformat(timespec="seconds")
 
 
+# --- Postgres shim: present the sqlite3.Row / cursor interface the code expects ------
+# ponytail: a ~40-line DBAPI adapter (qmark->pyformat, dict+positional rows, lastval()
+# for lastrowid) instead of rewriting ~60 raw queries into SQLAlchemy Core. The SQLite
+# path stays untouched; the schema is shared via schema.py (used for create_all + tests).
+class _Row(dict):
+    """dict row that also supports positional indexing, so both r["c"] and r[0] work."""
+    def __init__(self, names, values):
+        super().__init__(zip(names, values))
+        self._vals = list(values)
+
+    def __getitem__(self, k):
+        if isinstance(k, int):
+            return self._vals[k]
+        return super().__getitem__(k)
+
+
+def _qmark(sql):
+    return sql.replace("?", "%s")
+
+
+class _PGCursor:
+    def __init__(self, cur):
+        self.c = cur
+
+    def fetchone(self):
+        row = self.c.fetchone()
+        if row is None:
+            return None
+        return _Row([d[0] for d in self.c.description], row)
+
+    def fetchall(self):
+        names = [d[0] for d in self.c.description]
+        return [_Row(names, r) for r in self.c.fetchall()]
+
+    def __iter__(self):
+        return iter(self.fetchall())
+
+    @property
+    def lastrowid(self):
+        self.c.execute("SELECT lastval()")
+        return self.c.fetchone()[0]
+
+
+class _PGConn:
+    """Thin wrapper over a psycopg DBAPI connection matching sqlite3.Connection usage."""
+    row_factory = None  # settable no-op; PG rows already behave like sqlite3.Row
+
+    def __init__(self, raw):
+        self.raw = raw
+
+    def execute(self, sql, params=()):
+        cur = self.raw.cursor()
+        cur.execute(_qmark(sql), tuple(params))
+        return _PGCursor(cur)
+
+    def executescript(self, sql):  # only exercised on the SQLite path in practice
+        cur = self.raw.cursor()
+        cur.execute(sql)
+        self.raw.commit()
+
+    def commit(self):
+        self.raw.commit()
+
+    def close(self):
+        self.raw.close()
+
+
+_ENGINE = None
+
+
+def _engine():
+    global _ENGINE
+    if _ENGINE is None:
+        from sqlalchemy import create_engine
+        url = DATABASE_URL
+        if url.startswith("postgres://"):
+            url = "postgresql+psycopg://" + url[len("postgres://"):]
+        elif url.startswith("postgresql://"):
+            url = "postgresql+psycopg://" + url[len("postgresql://"):]
+        _ENGINE = create_engine(url, pool_pre_ping=True)
+    return _ENGINE
+
+
 def connect(path=DB_PATH):
+    if _is_pg():
+        return _PGConn(_engine().raw_connection())
     con = sqlite3.connect(path)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys=ON")
@@ -99,10 +193,22 @@ def connect(path=DB_PATH):
 
 
 def init_db(path=DB_PATH):
+    if _is_pg():
+        import schema
+        schema.metadata.create_all(_engine())
+        return
     con = connect(path)
     con.executescript(SCHEMA)
     con.commit()
     con.close()
+
+
+# Duplicate-name detection works across backends (sqlite + psycopg raise different types).
+try:
+    import psycopg
+    INTEGRITY_ERRORS = (sqlite3.IntegrityError, psycopg.errors.IntegrityError)
+except Exception:  # psycopg only needed for the Postgres backend
+    INTEGRITY_ERRORS = (sqlite3.IntegrityError,)
 
 
 # --- groups ---------------------------------------------------------------
@@ -188,7 +294,7 @@ def rename_player(con, pid, name):
     try:
         con.execute("UPDATE players SET name=? WHERE id=?", (name, pid))
         con.commit()
-    except sqlite3.IntegrityError:
+    except INTEGRITY_ERRORS:
         raise ValueError("duplicate name in this group")
 
 
@@ -225,7 +331,7 @@ def add_player(con, group_id, name):
         )
         con.commit()
         return cur.lastrowid
-    except sqlite3.IntegrityError:
+    except INTEGRITY_ERRORS:
         raise ValueError("duplicate name in this group")
 
 

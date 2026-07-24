@@ -116,21 +116,29 @@ SQLite file `tennis.db` is created on first run (gitignored).
   live here — the smoke test `test_db_backend.py` compiles the schema for the Postgres dialect
   (no live PG), and asserts the metadata matches the SQLite SCHEMA.
 
-## V2 remaining work (resume here)
-- **Task 6 — Full V2 UI (rally-v9).** Largest task. Court-shaped picker; Log tab order
-  (Start-a-live-match on top, one live match at a time, chemistry rows from pair ratings);
-  per-point-default scoring + Set-scores grid switch; TT confirm-rotation (Yes/No) driving all
-  serve attribution; Live tab read-only broadcast cards + win-probability bars (2-way & 3-way);
-  Ranks with funnel filter, 0-based display (Elo−1200), pinned own card; Player page; History
-  with funnel + inline date/time edit; Groups with account card + tap-to-switch. **Wire in the
-  Task 2 engine+sync here** (instant DOM, status chip, hydrate-once, partial updates, no reloads).
-- **Task 8 — Human QA.** After 4+6: manually exercise every flow on a phone viewport; report
-  rough edges. Depends on 4+6.
-
-Backend is already v2-ready for these: instant results (Task 5), point-dominance (Task 7),
-client engine/sync (Task 2). Final commit message for the last task is specified in the brief.
+## V2 status: COMPLETE (Tasks 0–8 done)
+All nine v2 tasks are built, tested, and committed. 56 Python + 2 Node tests green. QA (Task 8)
+was run in-browser end-to-end (see the session report). Deploy still requires real Supabase
+keys (`SUPABASE_URL`/`SUPABASE_ANON_KEY`) + `DATABASE_URL` + `ADMIN_KEY` as env vars.
 
 ## V2 progress (task-by-task, newest first)
+- **Task 6 + 8 — Full V2 UI + QA (done).** Rebuilt all tabs + player page to the rally-v9 spec
+  (clay, 5 tabs). Sign-in gate (auth.js) → "Which player are you?" pick (locked). LOG: court
+  picker (`log.js`) — clay court, slots per format, tap-to-fill/remove, first-serve 🎾, doubles
+  chemistry rows from pair ratings; Start greys to "A match is already live" (one at a time,
+  rejects busy players). Live editor wires engine.js + sync.js: instant DOM per tap, background
+  sync with `● synced / ○ saving…` chip, hydrate-once, no reloads; per-point default + Set-scores
+  grid; TT scored per-game with the **confirm-rotation** Yes/No flow (stores confirmed
+  server/receiver → drives serve attribution). Already-played grid + native date/time. LIVE:
+  read-only broadcast cards (all 3 formats) with inline 🎾 server + 2-way/3-way win-prob bars;
+  empty sections render nothing; polls. RANKS: search + funnel, 0-based display (Elo−1200),
+  green live dot, pinned own card, "n of 5". PLAYER page 0-based. HISTORY: funnel + inline
+  date/time edit (`/date`). GROUPS: account card, tap-to-switch rows, member public/private flip.
+  Server support (`6a`): `/api/meta`, win-prob in live feed, `tt_games.receiver_player_id`,
+  no-cache header on /static (fresh assets after deploy). Tests: `test_ui_support.py` (4).
+  QA verified in-browser: mock Google sign-in, link-as-Ann, full singles (6-0 → +28 with
+  point-dominance), TT Yes + No rotation paths, live win-prob, ranks 0-based, groups flip,
+  sync chip + data-lands-on-retry.
 - **Task 4 — Supabase auth (backend + client module done; sign-in UI wires into Task 6).**
   `auth.py` provider: Supabase (Google + email OTP) when `SUPABASE_URL`+`SUPABASE_ANON_KEY`
   set, else a self-contained **local mock** (email OTP returns `dev_code`; Google = fixed

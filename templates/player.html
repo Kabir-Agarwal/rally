@@ -11,9 +11,9 @@
     last 5: {% for r in p.last5 %}<b style="color:{{ 'var(--live)' if r=='W' else '#c0392b' }}">{{ r }}</b>{% endfor %}
   </div>
   <div class="row" style="margin-top:10px">
-    <div class="setcol"><div class="muted">Singles</div><div style="font-size:22px;font-weight:900">{{ p.singles }}</div>
+    <div class="setcol"><div class="muted">Singles</div><div style="font-size:22px;font-weight:900">{{ '%+d'|format(p.singles - 1200) }}</div>
       {% if p.singles_prov %}<span class="pill">{{ p.singles_n }} of 5</span>{% endif %}</div>
-    <div class="setcol"><div class="muted">Doubles</div><div style="font-size:22px;font-weight:900">{{ p.doubles }}</div>
+    <div class="setcol"><div class="muted">Doubles</div><div style="font-size:22px;font-weight:900">{{ '%+d'|format(p.doubles - 1200) }}</div>
       {% if p.doubles_prov %}<span class="pill">{{ p.doubles_n }} of 5</span>{% endif %}</div>
   </div>
 </div>
@@ -23,7 +23,7 @@
 <div class="card" style="padding:6px 12px">
   {% for pr in p.pairs %}
   <div class="lbrow" style="cursor:default"><div class="nm">with {{ pr.partner }}</div>
-    <div class="rt">{{ pr.rating }}</div>{% if pr.provisional %}<span class="pill">{{ pr.n }}/3</span>{% endif %}</div>
+    <div class="rt">{{ '%+d'|format(pr.rating - 1200) }}</div>{% if pr.provisional %}<span class="pill">{{ pr.n }}/3</span>{% endif %}</div>
   {% endfor %}
 </div>
 {% endif %}

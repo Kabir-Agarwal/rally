@@ -131,3 +131,84 @@ input,select{font:inherit;padding:11px 12px;border:1.5px solid var(--line);borde
 .ttboard .row{gap:6px;margin-top:6px}
 .deltas{font-size:11px;font-weight:700;margin-left:6px}
 .delta.up{color:var(--live)} .delta.down{color:#c0392b}
+
+/* ---------- v2 components ---------- */
+.sec-title{font-size:13px;font-weight:800;color:var(--clay-deep);margin:16px 16px 6px;text-transform:uppercase;letter-spacing:.03em}
+.tickmark{color:var(--live);font-weight:900}
+.dotspace{display:inline-block;width:8px;margin-right:5px}
+.busy{opacity:.55}
+
+/* sign-in */
+#signinGate .btn{margin-top:2px}
+
+/* which-player modal + who sheet */
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:60;display:flex;align-items:flex-start;justify-content:center}
+.modal .sheet3{background:var(--cream);border-radius:16px;padding:16px;margin-top:60px;width:88%;max-width:380px}
+
+/* funnel */
+.funnel{margin:8px 16px;background:var(--cream);border:1px solid var(--line);border-radius:12px;padding:10px}
+.funnelrow{display:flex;align-items:center;gap:8px;margin:6px 0}
+.funnellab{font-size:12px;font-weight:800;color:var(--muted);width:44px}
+.seg.small button{padding:6px 10px;font-size:12px}
+.tapstats{font-size:10px;color:var(--muted)}
+
+/* court picker */
+.court{position:relative;background:linear-gradient(180deg,var(--clay),var(--clay-deep));border:2px solid #fff;
+  border-radius:12px;padding:10px;display:grid;gap:8px;min-height:150px;margin-top:10px}
+.court.singles{grid-template-rows:1fr 1fr}
+.court.doubles{grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr}
+.court.tt{grid-template-rows:1fr 1fr auto}
+.court .net{position:absolute;left:6px;right:6px;top:50%;height:2px;background:rgba(255,255,255,.85);transform:translateY(-1px)}
+.cslot{background:rgba(255,255,255,.12);border:1.5px dashed rgba(255,255,255,.6);border-radius:10px;
+  padding:8px;color:#fff;text-align:center;cursor:pointer;min-height:52px;display:flex;flex-direction:column;justify-content:center}
+.cslot.filled{background:rgba(255,255,255,.9);color:var(--ink);border-style:solid;border-color:#fff}
+.cslot.bench{grid-column:1/-1;background:rgba(0,0,0,.18);border-color:rgba(255,255,255,.4)}
+.cslot.filled.bench{background:#efe7dd;color:var(--ink)}
+.cslotlab{font-size:10px;opacity:.85;font-weight:700;text-transform:uppercase}
+.cslotname{font-weight:800;font-size:15px;margin-top:2px}
+.chip.sel{box-shadow:0 0 0 2px var(--yellow)}
+.pickchip.sel{box-shadow:0 0 0 2px var(--yellow)}
+
+/* chemistry */
+.chemrow{margin:8px 4px 0;font-size:13px}
+.chem.pos{color:var(--live);font-weight:800}
+.chem.neg{color:#c0392b;font-weight:800}
+
+/* live editor */
+.edhead{font-weight:800;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.bigscore{font-size:40px;font-weight:900;color:var(--clay-deep);text-align:center;margin:6px 0}
+.greyed{background:#e7ded3 !important;color:#9b8b7d !important}
+.syncchip{font-size:11px;font-weight:800;padding:2px 8px;border-radius:20px;margin-left:auto}
+.syncchip.synced{background:#e6f6ec;color:#1f7a45}
+.syncchip.saving{background:#fdf2d6;color:#8a6d00}
+
+/* broadcast cards (Live tab) */
+.bcast{background:var(--cream);border-radius:14px;padding:12px 14px;margin:10px 16px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+.bhead{font-size:11px;font-weight:800;color:var(--clay-deep);letter-spacing:.04em;margin-bottom:6px}
+.brow{display:flex;align-items:center;gap:10px}
+.bteam{flex:1}
+.bname{font-weight:700;font-size:15px}
+.bsets{display:flex;gap:4px}
+.ptsbox{background:var(--clay);color:#fff;border-radius:8px;padding:4px 10px;font-weight:900}
+.ttstrip{display:flex;gap:6px;flex-wrap:wrap;margin:4px 0}
+.ttcell{background:var(--sand);border-radius:8px;padding:4px 10px;font-size:13px;font-weight:700}
+.winr{font-weight:800}
+
+/* win-prob bars */
+.wp2{display:flex;align-items:center;gap:6px;margin-top:8px;font-size:11px;font-weight:700}
+.wpend{white-space:nowrap;color:var(--muted)}.wpend.right{text-align:right}
+.wpbar{flex:1;height:8px;background:var(--team2);border-radius:6px;overflow:hidden}
+.wpfill{display:block;height:100%;background:var(--team1)}
+.wp3{display:flex;gap:6px;margin-top:8px}
+.wp3seg{flex:1;background:var(--sand);border-radius:8px;padding:4px;text-align:center}
+.wp3name{font-size:11px;font-weight:700}.wp3pct{font-weight:900;color:var(--clay-deep)}
+
+/* groups + account */
+.grouprow{display:flex;align-items:center;gap:8px;padding:9px 8px;border-bottom:1px solid var(--line);cursor:pointer}
+.grouprow:last-child{border-bottom:none}
+.grouprow.cur{background:rgba(214,237,23,.14);border-radius:10px}
+.switcher .grp{cursor:pointer}
+
+/* history date edit */
+.editdt{background:none;border:none;cursor:pointer;font-size:13px;margin-left:6px}
+.dtedit{margin-top:6px}

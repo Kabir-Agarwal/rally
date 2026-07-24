@@ -1,7 +1,16 @@
 {% extends "base.html" %}
 {% block content %}
-<div id="requests"></div>
-<div class="sec-title">History</div>
+<div class="row" style="margin:12px 16px 0">
+  <div class="sec-title" style="margin:0;flex:1">History</div>
+  <button class="btn sm ghost" style="width:auto" onclick="toggleFunnel('histFunnel')">▼</button>
+</div>
+<div id="histFunnel" class="funnel" style="display:none">
+  <div class="funnelrow"><span class="funnellab">Kind</span>
+    <span class="seg small"><button class="on" onclick="setHistOpt('kind','all',this)">All</button>
+      <button onclick="setHistOpt('kind','singles',this)">Singles</button>
+      <button onclick="setHistOpt('kind','doubles',this)">Doubles</button>
+      <button onclick="setHistOpt('kind','tt',this)">Triple</button></span></div>
+</div>
 <div id="historyList"><div class="empty">Loading…</div></div>
 <script>window.PAGE="history";</script>
 {% endblock %}

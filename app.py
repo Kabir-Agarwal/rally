@@ -26,6 +26,16 @@ from ratings import START
 BASE = Path(__file__).parent
 app = FastAPI(title="Rally")
 app.mount("/static", StaticFiles(directory=BASE / "static"), name="static")
+
+
+@app.middleware("http")
+async def _no_cache_static(request: Request, call_next):
+    # Serve fresh JS/CSS — avoids stale assets after a deploy (and during dev). Tiny app,
+    # revalidation cost is negligible; content-hashed filenames would be the scale upgrade.
+    resp = await call_next(request)
+    if request.url.path.startswith("/static/"):
+        resp.headers["Cache-Control"] = "no-cache"
+    return resp
 templates = Jinja2Templates(directory=BASE / "templates")
 
 db.init_db()
@@ -116,11 +126,15 @@ def match_view(con, m):
         v["tally"] = [{"id": r["id"], "name": r["name"], "wins": tally[r["id"]]} for r in rot]
         v["game_no"] = gi
         v["pairing"] = pairing
+        v["tt_games"] = [{"server": gm["server_player_id"],
+                          "receiver": gm["receiver_player_id"] if "receiver_player_id" in gm.keys() else None,
+                          "winner": gm["winner_player_id"]} for gm in games]
         return v
 
     # singles/doubles: prefer point reconstruction when point logs exist
     pts = con.execute("SELECT winner_side FROM point_logs WHERE match_id=? ORDER BY seq", (mid,)).fetchall()
     if pts:
+        v["points"] = [p["winner_side"] for p in pts]      # raw sequence for client-engine hydrate
         sc = scoring.score_points([p["winner_side"] for p in pts])
         sets = list(sc["sets"])
         if sc["cur_games"] != (0, 0) or sc["points"] != (0, 0):
@@ -526,6 +540,9 @@ async def api_sets(code: str, mid: int, request: Request):
     except ValueError as e:
         con.close()
         return JSONResponse({"error": str(e)}, 400)
+    # grid becomes the source of truth: drop any per-point log so the two don't fight
+    con.execute("DELETE FROM point_logs WHERE match_id=?", (mid,))
+    con.commit()
     con.close()
     return {"ok": True}
 
@@ -581,6 +598,21 @@ async def api_tt_undo(code: str, mid: int, request: Request):
     v = match_view(con, db.match_row(con, mid))
     con.close()
     return v
+
+
+@app.post("/g/{code}/api/match/{mid}/date")
+async def api_match_date(code: str, mid: int, request: Request):
+    """History inline date/time edit (member action)."""
+    d = await _body(request)
+    con = get_con()
+    require_user(request, con)
+    require_group(con, code)
+    played = (d.get("played_on") or "").strip()
+    if played:
+        con.execute("UPDATE matches SET played_on=? WHERE id=?", (played, mid))
+        con.commit()
+    con.close()
+    return {"ok": True}
 
 
 @app.post("/g/{code}/api/match/{mid}/finish")

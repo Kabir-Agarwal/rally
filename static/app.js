@@ -1,450 +1,377 @@
 "use strict";
-// tennis-scores client. No prompt/alert/confirm anywhere — inline inputs + errors only.
+/* Rally v2 client. No popups anywhere. Auth-gated writes; instant DOM from the client engine
+   (engine.js) with background sync (sync.js); poll for read views; 0-based rating display. */
 
-// ---- storage ----
+// ---------- helpers ----------
+const el = (h) => { const d = document.createElement("div"); d.innerHTML = h.trim(); return d.firstChild; };
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const av = (n) => `<span class="avatar">${esc((n || "?")[0]).toUpperCase()}</span>`;
+const authHeaders = () => (window.Auth ? Auth.headers() : {});
+
+async function api(url, body, method) {
+  const m = method || (body ? "POST" : "GET");
+  const opt = { method: m, headers: { ...authHeaders() } };
+  if (body !== undefined) { opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
+  const r = await fetch(url, opt);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw (j.error || ("error " + r.status));
+  return j;
+}
+
+// joined-groups memory (device-local); identity is server-side (player_links)
 const LS = {
-  groups(){ try{return JSON.parse(localStorage.getItem("ts_groups")||"[]")}catch(e){return[]} },
-  addGroup(g){ const gs=LS.groups().filter(x=>x.code!==g.code); gs.unshift(g); localStorage.setItem("ts_groups",JSON.stringify(gs)); },
-  me(code){ return localStorage.getItem("ts_me_"+code); },
-  setMe(code,pid){ localStorage.setItem("ts_me_"+code,pid); },
+  groups() { try { return JSON.parse(localStorage.getItem("rally_groups") || "[]"); } catch (e) { return []; } },
+  add(g) { const gs = LS.groups().filter(x => x.code !== g.code); gs.unshift(g); localStorage.setItem("rally_groups", JSON.stringify(gs)); },
 };
-async function api(url,body){
-  const opt=body?{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}:{};
-  const r=await fetch(url,opt); const j=await r.json().catch(()=>({}));
-  if(!r.ok) throw (j.error||("error "+r.status)); return j;
-}
-const el=(h)=>{const d=document.createElement("div");d.innerHTML=h.trim();return d.firstChild;};
-const esc=(s)=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-const av=(n)=>`<span class="avatar">${esc((n||"?")[0]).toUpperCase()}</span>`;
 
-// ---- landing ----
-async function doCreate(){
-  const name=document.getElementById("grpName").value.trim();
-  const err=document.getElementById("createErr"); err.textContent="";
-  if(!name){err.textContent="name required";return;}
-  try{
-    const g=await api("/api/group/create",{name});
-    LS.addGroup(g);
-    document.getElementById("createForm").style.display="none";
-    document.getElementById("createDone").style.display="block";
-    document.getElementById("newCode").textContent=g.code;
-    document.getElementById("enterBtn").onclick=()=>location.href="/g/"+g.code+"/live";
-  }catch(e){err.textContent=e;}
+// background sync queue (auth-aware fetch); status chip
+const queue = window.SyncQueue ? new SyncQueue({
+  fetch: (url, opt) => fetch(url, { ...opt, headers: { ...(opt.headers || {}), ...authHeaders() } }),
+  onStatus: updateChip
+}) : null;
+function updateChip(s) {
+  const c = document.getElementById("syncChip"); if (!c) return;
+  c.textContent = s === "saving" ? "○ saving…" : "● synced";
+  c.className = "syncchip " + (s === "saving" ? "saving" : "synced");
 }
-async function doJoin(){
-  const code=document.getElementById("joinCode").value.trim().toUpperCase();
-  const err=document.getElementById("joinErr"); err.textContent="";
-  try{ const g=await api("/api/group/join",{code}); LS.addGroup(g); location.href="/g/"+g.code+"/live"; }
-  catch(e){err.textContent=e;}
-}
-function renderMyGroups(){
-  const host=document.getElementById("myGroups"); if(!host) return;
-  const gs=LS.groups(); if(!gs.length){host.innerHTML="";return;}
-  host.innerHTML=`<div class="sec-title">Your groups</div>`;
-  const card=el(`<div class="card" style="padding:4px 4px"></div>`);
-  gs.forEach(g=>card.appendChild(el(
-    `<div class="lbrow" onclick="location.href='/g/${g.code}/live'"><div class="nm">${esc(g.name)}</div><div class="tag">${g.code}</div></div>`)));
-  host.appendChild(card);
+function enqueue(url, body) { return queue ? queue.push({ url, body }) : api(url, body); }
+
+let ME = { signed_in: false, player_id: null, player_name: null, email: null };
+
+// ---------- auth gate + identity ----------
+async function authGate() {
+  // Every tab needs a signed-in identity to act. Public reads still work, but the app is
+  // gated to sign-in first (the reference UI signs in before the group tabs).
+  if (window.Auth && Auth.signedIn()) return true;
+  const tc = document.getElementById("tabContent");
+  if (tc) tc.style.display = "none";
+  const gate = el(`<div id="signinGate"></div>`);
+  document.querySelector(".app").appendChild(gate);
+  Auth.renderSignIn(gate, () => location.reload());
+  return false;
 }
 
-// ---- switcher ----
-function openSwitcher(){
-  const s=document.getElementById("switcher"); if(!s)return; s.classList.add("open");
-  const list=document.getElementById("switcherList"); const gs=LS.groups();
-  list.innerHTML = gs.length?"":"No other groups yet.";
-  gs.forEach(async g=>{
-    const row=el(`<div class="grp"><span class="gname">${esc(g.name)}</span>
-      <span class="dotwrap"></span>
-      <button class="btn sm ghost" onclick="location.href='/g/${g.code}/live'">Switch</button></div>`);
-    list.appendChild(row);
-    try{ const d=await api(`/g/${g.code}/api/live`); if(d.matches.length) row.querySelector(".dotwrap").innerHTML='<span class="dot pulse"></span>'; }catch(e){}
+async function ensureIdentity() {
+  ME = await api(`/g/${GROUP.code}/api/me`);
+  if (ME.signed_in && !ME.player_id) return await pickWhoAmI();
+  return true;
+}
+async function pickWhoAmI() {
+  const meta = await api(`/g/${GROUP.code}/api/meta`);
+  return new Promise((resolve) => {
+    const ov = el(`<div class="modal" id="whoModal"><div class="sheet3">
+      <div style="font-weight:800;font-size:17px">Which player are you?</div>
+      <div class="muted" style="margin:2px 0 10px">Pick once — this locks to your account. Players are added by the admin.</div>
+      <div class="chips" id="whoChips"></div>
+      <div class="err" id="whoErr"></div></div></div>`);
+    document.body.appendChild(ov);
+    const chips = ov.querySelector("#whoChips");
+    if (!meta.players.length) chips.innerHTML = '<span class="muted">No players yet — ask the admin to add players.</span>';
+    meta.players.forEach(p => {
+      const chip = el(`<div class="chip">${esc(p.name)}</div>`);
+      chip.onclick = async () => {
+        try {
+          await api(`/g/${GROUP.code}/api/link`, { player_id: p.id });
+          ME = await api(`/g/${GROUP.code}/api/me`);
+          ov.remove(); resolve(true);
+        } catch (e) { ov.querySelector("#whoErr").textContent = e; }
+      };
+      chips.appendChild(chip);
+    });
   });
 }
-function closeSwitcher(){ const s=document.getElementById("switcher"); if(s)s.classList.remove("open"); }
 
-// ---- polling ----
-function poll(fn,ms){ fn(); let t=setInterval(()=>{ if(!document.hidden) fn(); },ms||3000); return t; }
+// ---------- header switcher ----------
+async function openSwitcher() {
+  const s = document.getElementById("switcher"); if (!s) return; s.classList.add("open");
+  const list = document.getElementById("switcherList"); const gs = LS.groups();
+  list.innerHTML = gs.length ? "" : '<div class="muted">No other groups yet.</div>';
+  gs.forEach(async g => {
+    const cur = g.code === GROUP.code;
+    const row = el(`<div class="grp"><span class="gname">${esc(g.name)}${cur ? ' <span class="tickmark">✓</span>' : ''}</span>
+      <span class="tag">${g.code}</span><span class="dw"></span></div>`);
+    row.onclick = () => { if (!cur) location.href = "/g/" + g.code + "/live"; };
+    list.appendChild(row);
+    try { const d = await api(`/g/${g.code}/api/live`); if (d.matches.length) row.querySelector(".dw").innerHTML = '<span class="dot pulse"></span>'; } catch (e) { }
+  });
+}
+function closeSwitcher() { const s = document.getElementById("switcher"); if (s) s.classList.remove("open"); }
 
-// ---- match card (read-only scoresheet) ----
-function matchCard(m,opts){
-  opts=opts||{};
-  const live = m.status==="live";
-  let head=`<div class="names">`;
-  if(m.kind==="tt"){
-    head+=`<div class="side">${m.rotation.map(r=>av(r.name)+esc(r.name)).join(" · ")}</div>`;
-  }else{
-    const s1=m.side1.map(p=>av(p.name)+esc(p.name)).join(" & ");
-    const s2=m.side2.map(p=>av(p.name)+esc(p.name)).join(" & ");
-    const w1=m.winner_side===1, w2=m.winner_side===2;
-    head+=`<div class="side">${w1?'<span class="dot win"></span>':''}${s1}${w1?' 🏆':''}</div>`;
-    head+=`<div class="side" style="justify-content:flex-end">${s2}${w2?' 🏆':''}${w2?'<span class="dot win"></span>':''}</div>`;
+// ---------- polling ----------
+function poll(fn, ms) { fn(); return setInterval(() => { if (!document.hidden) fn(); }, ms || 3000); }
+
+// ---------- rating display (0-based) ----------
+const disp = (elo0based) => (elo0based > 0 ? "+" : "") + elo0based;   // meta already 0-based
+const dispFromElo = (elo) => { const v = Math.round(elo) - 1200; return (v > 0 ? "+" : "") + v; };
+
+// ---------- shared: broadcast/scoreboard card (read-only) ----------
+function winBar(wp, kind) {
+  if (!wp || !wp.length) return "";
+  if (kind === "tt") {
+    return `<div class="wp3">` + wp.map(w =>
+      `<div class="wp3seg"><div class="wp3name">${esc(w.label)}</div><div class="wp3pct">${w.pct}%</div></div>`).join("") + `</div>`;
   }
-  head+= live?`<span class="pill live">LIVE</span>`:(opts.tag?`<span class="tag">${esc(opts.tag)}</span>`:"");
-  head+=`</div>`;
+  const a = wp[0], b = wp[1];
+  return `<div class="wp2"><span class="wpend">${esc(a.label)} · ${a.pct}%</span>
+    <span class="wpbar"><span class="wpfill" style="width:${a.pct}%"></span></span>
+    <span class="wpend right">${b.pct}% · ${esc(b.label)}</span></div>`;
+}
 
-  let body="";
-  if(m.kind==="tt"){
-    body=`<div class="ttboard">`;
-    if(m.pairing) body+=`<div class="server">🎾 ${esc(m.pairing.server)} serves vs ${esc(m.pairing.receiver)} · ${esc(m.pairing.sitter)} sits</div>`;
-    body+=`<div class="row" style="gap:8px;margin-top:6px">`+
-      m.tally.map(t=>`<div class="setcell">${esc(t.name)}: ${t.wins}</div>`).join("")+`</div></div>`;
-  }else{
-    body=`<div class="sheet"><div class="setcol">`+
-      m.sets.map(s=>`<div class="setcell ${s.won1?'won':''}">${s.g1}</div>`).join("")+`</div><div class="setcol">`+
-      m.sets.map(s=>`<div class="setcell ${s.won2?'won':''}">${s.g2}</div>`).join("")+`</div>`;
-    if(m.per_point && live) body+=`<div class="pointboard" style="flex:1"><div class="pointscore">${esc(m.point_score||"")}</div></div>`;
-    body+=`</div>`;
-    if(m.per_point && m.server && live) body+=`<div class="server">🎾 ${esc(m.server)} serving${m.is_tiebreak?' · tiebreak':''}</div>`;
+function broadcastCard(m) {
+  const started = (m.played_on || "");
+  if (m.kind === "tt") {
+    const p = m.pairing;
+    let head = `<div class="bhead">TRIPLE THREAT · LIVE</div>`;
+    let strip = `<div class="ttstrip">` + m.tally.map(t => `<div class="ttcell">${esc(t.name)} <b>${t.wins}</b></div>`).join("") + `</div>`;
+    let line = p ? `<div class="server">Server 🎾 ${esc(p.server)} · ${esc(p.receiver)} Receiver</div>
+      <div class="muted">Game ${m.game_no + 1} · ${esc(p.sitter)} sits out</div>` : "";
+    return el(`<div class="bcast">${head}${strip}${line}${winBar(m.win_prob, "tt")}${m.group ? `<div class="note">${esc(m.group)}</div>` : ""}</div>`);
   }
-  const tagline = m.kind.toUpperCase()+(m.played_on?" · "+m.played_on:"");
-  return el(`<div class="match">${head}${body}<div class="note">${tagline}${opts.group?' · '+esc(opts.group):''}</div>${opts.extra||""}</div>`);
+  const w1 = m.winner_side === 1, w2 = m.winner_side === 2;
+  const side = (arr, srvId) => arr.map(p => `<div class="bname">${p.id === m.server_id ? '🎾 ' : ''}${esc(p.name)}</div>`).join("");
+  let cols = m.sets.map(s => `<div class="setcol"><div class="setcell ${s.won1 ? 'won' : ''}">${s.g1}</div><div class="setcell ${s.won2 ? 'won' : ''}">${s.g2}</div></div>`).join("");
+  let pts = (m.per_point && m.point_score) ? `<div class="ptsbox">${esc(m.point_score)}</div>` : "";
+  return el(`<div class="bcast">
+    <div class="bhead">${m.kind.toUpperCase()} · LIVE</div>
+    <div class="brow"><div class="bteam">${side(m.side1)}</div><div class="bsets">${cols}</div>${pts}</div>
+    <div class="brow"><div class="bteam">${side(m.side2)}</div></div>
+    ${winBar(m.win_prob, m.kind)}${m.group ? `<div class="note">${esc(m.group)}</div>` : ""}</div>`);
 }
 
 // ================= LIVE =================
-function initLive(){
-  poll(async()=>{
-    const d=await api(`/g/${GROUP.code}/api/live`);
-    const host=document.getElementById("liveMatches");
-    host.innerHTML="";
-    if(!d.matches.length) host.appendChild(el(`<div class="empty">No live matches. Start one in Log.</div>`));
-    d.matches.forEach(m=>host.appendChild(matchCard(m)));
-    const pub=document.getElementById("publicMatches"); pub.innerHTML="";
-    if(!d.public.length) pub.appendChild(el(`<div class="empty">Nothing live elsewhere.</div>`));
-    d.public.forEach(m=>pub.appendChild(matchCard(m,{group:m.group})));
+function initLive() {
+  poll(async () => {
+    const d = await api(`/g/${GROUP.code}/api/live`);
+    const host = document.getElementById("liveMatches"); host.innerHTML = "";
+    if (!d.matches.length) host.appendChild(el(`<div class="empty">No live matches. Start one in Log.</div>`));
+    d.matches.forEach(m => host.appendChild(broadcastCard(m)));
+    const pub = document.getElementById("publicWrap");
+    if (!d.public.length) { pub.innerHTML = ""; }   // empty sections render NOTHING
+    else {
+      pub.innerHTML = `<div class="sec-title">From public groups — watch only</div>`;
+      const box = el(`<div id="publicMatches"></div>`); pub.appendChild(box);
+      d.public.forEach(m => box.appendChild(broadcastCard(m)));
+    }
   });
 }
 
-// ================= LEADERBOARD =================
-let LB={scope:"group",mode:"singles",data:null};
-function setScope(b){document.querySelectorAll("#lbScope button").forEach(x=>x.classList.remove("on"));b.classList.add("on");LB.scope=b.dataset.scope;loadLeaderboard();}
-function setMode(b){document.querySelectorAll("#lbMode button").forEach(x=>x.classList.remove("on"));b.classList.add("on");LB.mode=b.dataset.mode;loadLeaderboard();}
-async function loadLeaderboard(){
-  LB.data=await api(`/g/${GROUP.code}/api/leaderboard?scope=${LB.scope}&mode=${LB.mode}`);
-  document.getElementById("scopeNote").textContent = LB.scope==="everyone"
-    ? "Everyone = players from public groups, tagged by group." : "";
-  renderLeaderboard();
+// ================= RANKS =================
+let RANK = { mode: "singles", scope: "group", data: null };
+function toggleFunnel(id) { const p = document.getElementById(id); p.style.display = p.style.display === "block" ? "none" : "block"; }
+function setRankOpt(kind, val, btn) {
+  btn.parentElement.querySelectorAll("button").forEach(b => b.classList.remove("on")); btn.classList.add("on");
+  RANK[kind] = val; loadRanks();
 }
-function lbRow(r,me){
-  const you=r.id==me && LB.scope==="group";
-  const dot=r.live?'<span class="dot pulse"></span>':'';
-  const tag=r.group?`<span class="tag">${esc(r.group)}</span>`:'';
-  return `<div class="lbrow ${you?'you':''}" onclick="location.href='/g/${GROUP.code}/player/${r.id}'">
-    <div class="rk">${r.rank||''}</div><div class="nm">${dot}${esc(r.name)}${tag}${you?' <span class="youpill">YOU</span>':''}</div>
-    <div class="rt">${r.rating}</div></div>`;
+async function loadRanks() {
+  RANK.data = await api(`/g/${GROUP.code}/api/leaderboard?scope=${RANK.scope}&mode=${RANK.mode}`);
+  renderRanks();
 }
-function renderLeaderboard(){
-  if(!LB.data)return; const me=LS.me(GROUP.code); const q=(document.getElementById("lbSearch").value||"").toLowerCase();
-  const filt=(a)=>a.filter(r=>r.name.toLowerCase().includes(q));
-  const ranked=filt(LB.data.ranked), prov=filt(LB.data.provisional);
-  // subway-surfers you-card with true rank
-  const yc=document.getElementById("youCard"); yc.innerHTML="";
-  if(me && LB.scope==="group"){
-    const you=LB.data.ranked.find(r=>r.id==me);
-    if(you) yc.appendChild(el(`<div class="youcard">${av(you.name)}<div style="flex:1"><b>${esc(you.name)}</b> <span class="youpill">YOU</span></div>
-      <div>#${you.rank} · <b>${you.rating}</b></div></div>`));
+function rankRow(r, mePid) {
+  const you = r.id == mePid && RANK.scope === "group";
+  const dot = r.live ? '<span class="dot pulse"></span>' : '<span class="dotspace"></span>';
+  const tag = r.group ? `<span class="tag">${esc(r.group)}</span>` : "";
+  const rating = dispFromEloRow(r);
+  return `<div class="lbrow ${you ? 'you' : ''}" onclick="location.href='/g/${GROUP.code}/player/${r.id}'">
+    <div class="rk">${r.rank || '–'}</div>${av(r.name)}
+    <div class="nm">${dot}${esc(r.name)}${tag}${you ? ' <span class="youpill">YOU</span>' : ''}<div class="tapstats">tap for stats</div></div>
+    <div class="rt">${rating}</div></div>`;
+}
+const dispFromEloRow = (r) => { const v = r.rating - 1200; return (v > 0 ? "+" : "") + v; };
+function renderRanks() {
+  if (!RANK.data) return;
+  const q = (document.getElementById("rankSearch").value || "").toLowerCase();
+  const filt = a => a.filter(r => r.name.toLowerCase().includes(q));
+  const ranked = filt(RANK.data.ranked), prov = filt(RANK.data.provisional);
+  const yc = document.getElementById("youCard"); yc.innerHTML = "";
+  if (ME.player_id && RANK.scope === "group") {
+    const you = RANK.data.ranked.find(r => r.id == ME.player_id);
+    if (you) yc.appendChild(el(`<div class="youcard" onclick="location.href='/g/${GROUP.code}/player/${you.id}'">${av(you.name)}
+      <div style="flex:1"><b>${esc(you.name)}</b> <span class="youpill">YOU</span></div>
+      <div>#${you.rank} · <b>${dispFromEloRow(you)}</b></div></div>`));
   }
-  const list=document.getElementById("lbList");
-  list.innerHTML = ranked.length? ranked.map(r=>lbRow(r,me)).join("") : `<div class="empty">No ranked players yet.</div>`;
-  const pl=document.getElementById("lbProv");
-  pl.innerHTML = prov.length? prov.map(r=>`<div class="lbrow" onclick="location.href='/g/${GROUP.code}/player/${r.id}'">
-    <div class="rk">–</div><div class="nm">${r.live?'<span class="dot pulse"></span>':''}${esc(r.name)}${r.group?`<span class="tag">${esc(r.group)}</span>`:''}</div>
-    <div class="rt">${r.rating} <span class="pill">${r.n}/5</span></div></div>`).join("") : `<div class="empty">—</div>`;
+  document.getElementById("rankList").innerHTML = ranked.length ? ranked.map(r => rankRow(r, ME.player_id)).join("") : `<div class="empty">No ranked players yet.</div>`;
+  const provWrap = document.getElementById("provWrap");
+  provWrap.innerHTML = prov.length
+    ? `<div class="sec-title">Minimum 5 matches</div><div class="card" style="padding:2px 2px">` +
+      prov.map(r => `<div class="lbrow" onclick="location.href='/g/${GROUP.code}/player/${r.id}'"><div class="rk">–</div>${av(r.name)}
+        <div class="nm">${r.live ? '<span class="dot pulse"></span>' : '<span class="dotspace"></span>'}${esc(r.name)}${r.group ? `<span class="tag">${esc(r.group)}</span>` : ''}</div>
+        <div class="rt">${dispFromEloRow(r)} <span class="pill">${r.n} of 5</span></div></div>`).join("") + `</div>`
+    : "";
 }
-function initLeaderboard(){
-  loadLeaderboard();
-  poll(async()=>{
-    const d=await api(`/g/${GROUP.code}/api/live`);
-    const strip=document.getElementById("lbLive");
-    if(!d.matches.length){strip.innerHTML='<span class="muted">No live matches.</span>';return;}
-    strip.innerHTML=d.matches.map(m=>{
-      let line = m.kind==="tt"
-        ? m.tally.map(t=>esc(t.name)+" "+t.wins).join(" · ")
-        : esc((m.side1[0]||{}).name)+" vs "+esc((m.side2[0]||{}).name)+(m.per_point?"  "+esc(m.point_score||""):"");
-      return `<div class="lbrow" style="padding:6px 4px" onclick="location.href='/g/${GROUP.code}/live'"><span class="pill live">LIVE</span>&nbsp;<div class="nm">${line}</div></div>`;
-    }).join("");
-  });
-}
-
-// ================= LOG =================
-let NEW={kind:"singles",picked:[],ratings:{singles:{},doubles:{}}};
-function setKind(b){document.querySelectorAll("#kindSeg button").forEach(x=>x.classList.remove("on"));b.classList.add("on");NEW.kind=b.dataset.kind;NEW.picked=[];renderPicker();}
-function needCount(){return NEW.kind==="singles"?2:NEW.kind==="tt"?3:4;}
-function renderPicker(){
-  const host=document.getElementById("picker"); const need=needCount();
-  document.getElementById("pickHint").textContent =
-    NEW.kind==="singles"?"Pick 2 players in serving order (P1 serves first)."
-    :NEW.kind==="tt"?"Pick 3 in rotation order.":"Pick 4 in serving order: T1, T2, T1, T2.";
-  host.innerHTML="";
-  PLAYERS.forEach(p=>{
-    const idx=NEW.picked.indexOf(p.id);
-    const sel=idx>=0;
-    // team coloring for doubles/singles by serving slot parity
-    let cls="chip";
-    if(sel && NEW.kind!=="tt"){ cls+= (idx%2===0)?" t1":" t2"; }
-    else if(sel) cls+=" t1";
-    if(sel) cls+=" sel";
-    const badge=sel?`<span class="badge">${idx+1}</span>`:"";
-    host.appendChild(el(`<div class="${cls}" onclick="pick(${p.id})">${esc(p.name)}${badge}</div>`));
-  });
-  updateWinProb();
-}
-function pick(id){
-  const i=NEW.picked.indexOf(id);
-  if(i>=0){NEW.picked.splice(i,1);}
-  else if(NEW.picked.length<needCount()){NEW.picked.push(id);}
-  renderPicker();
-}
-function updateWinProb(){
-  const wp=document.getElementById("winProb"); if(!wp)return;
-  const need=needCount();
-  if(NEW.kind==="tt"||NEW.picked.length<need){wp.textContent="";return;}
-  const rmap=NEW.ratings.singles, rd=NEW.ratings.doubles;
-  let ra,rb;
-  if(NEW.kind==="singles"){ra=rmap[NEW.picked[0]]||1200;rb=rmap[NEW.picked[1]]||1200;}
-  else{ra=((rd[NEW.picked[0]]||1200)+(rd[NEW.picked[2]]||1200))/2; rb=((rd[NEW.picked[1]]||1200)+(rd[NEW.picked[3]]||1200))/2;}
-  const p=Math.round(100/(1+Math.pow(10,(rb-ra)/400)));
-  wp.innerHTML=`Win prob — Team 1 ${p}% vs ${100-p}% Team 2 <div style="height:8px;border-radius:6px;background:var(--team2);margin-top:4px"><div style="width:${p}%;height:100%;border-radius:6px;background:var(--team1)"></div></div>`;
-}
-async function addPlayer(){
-  const inp=document.getElementById("newPlayerName"); const name=inp.value.trim();
-  const err=document.getElementById("pickErr"); err.textContent="";
-  if(!name)return;
-  try{ const p=await api(`/g/${GROUP.code}/api/player`,{name}); PLAYERS.push(p); inp.value=""; renderPicker(); }
-  catch(e){err.textContent=e;}
-}
-async function startMatch(){
-  const err=document.getElementById("pickErr"); err.textContent="";
-  if(NEW.picked.length!==needCount()){err.textContent="pick "+needCount()+" players";return;}
-  const me=LS.me(GROUP.code);
-  let body={kind:NEW.kind,logger:me?+me:NEW.picked[0]};
-  if(NEW.kind==="tt") body.rotation=NEW.picked;
-  else if(NEW.kind==="singles"){body.side1=[NEW.picked[0]];body.side2=[NEW.picked[1]];}
-  else {body.side1=[NEW.picked[0],NEW.picked[2]];body.side2=[NEW.picked[1],NEW.picked[3]];}
-  try{ await api(`/g/${GROUP.code}/api/match/start`,body); NEW.picked=[]; renderPicker(); loadEditors(); }
-  catch(e){err.textContent=e;}
-}
-// live editors
-async function loadEditors(){
-  const d=await api(`/g/${GROUP.code}/api/live`);
-  const host=document.getElementById("liveEditors"); host.innerHTML="";
-  if(!d.matches.length){host.innerHTML=`<div class="empty">No live matches. Start one below.</div>`;return;}
-  d.matches.forEach(m=>host.appendChild(editorCard(m)));
-}
-function editorCard(m){
-  const card=el(`<div class="card" id="ed${m.id}"></div>`);
-  render_editor(card,m);
-  return card;
-}
-function render_editor(card,m){
-  const me=LS.me(GROUP.code);
-  let title = m.kind==="tt"? m.rotation.map(r=>esc(r.name)).join(" · ")
-    : m.side1.map(p=>esc(p.name)).join(" & ")+" vs "+m.side2.map(p=>esc(p.name)).join(" & ");
-  card.innerHTML=`<div style="font-weight:800;margin-bottom:6px">${title} <span class="pill live">LIVE</span></div>`;
-  const bodyId="body"+m.id;
-  card.appendChild(el(`<div id="${bodyId}"></div>`));
-  const body=card.querySelector("#"+bodyId);
-  if(m.kind==="tt") ttEditor(body,m);
-  else { card.dataset.mode=card.dataset.mode||"grid";
-    const seg=el(`<div class="seg" style="margin:8px 0"><button class="${card.dataset.mode==='grid'?'on':''}" onclick="setEdMode(${m.id},'grid')">Scoresheet</button><button class="${card.dataset.mode==='point'?'on':''}" onclick="setEdMode(${m.id},'point')">Point-by-point</button></div>`);
-    card.insertBefore(seg,body);
-    if(card.dataset.mode==="point") pointEditor(body,m); else gridEditor(body,m);
-  }
-  const foot=el(`<div class="row" style="margin-top:10px">
-    <button class="btn sm clay" onclick="markFinished(${m.id})">Mark finished</button>
-    <button class="btn sm danger" onclick="delMatch(${m.id})">Delete</button></div><div class="err" id="ederr${m.id}"></div>`);
-  card.appendChild(foot);
-}
-function setEdMode(id,mode){ const c=document.getElementById("ed"+id); c.dataset.mode=mode;
-  api(`/g/${GROUP.code}/api/match/${id}`).then(m=>render_editor(c,m)); }
-function gridEditor(host,m){
-  const sets = m.sets.length?m.sets:[{g1:0,g2:0}];
-  let rows=sets.map((s,i)=>`<div class="row" style="margin-top:6px">
-    <input type="number" min="0" value="${s.g1}" id="s${m.id}_${i}_1" style="text-align:center">
-    <span style="flex:0 0 auto">–</span>
-    <input type="number" min="0" value="${s.g2}" id="s${m.id}_${i}_2" style="text-align:center"></div>`).join("");
-  host.innerHTML=`<div class="muted">${m.side1.map(p=>esc(p.name)).join(" & ")} — ${m.side2.map(p=>esc(p.name)).join(" & ")}</div>
-    <div id="gridrows${m.id}" data-n="${sets.length}">${rows}</div>
-    <div class="row" style="margin-top:8px"><button class="btn sm ghost" onclick="addSet(${m.id})">+ Add set</button>
-    <button class="btn sm" onclick="saveGrid(${m.id})">Save</button></div>`;
-}
-function addSet(id){
-  const rows=document.getElementById("gridrows"+id); const n=+rows.dataset.n;
-  if(n>=5)return; rows.dataset.n=n+1;
-  rows.appendChild(el(`<div class="row" style="margin-top:6px">
-    <input type="number" min="0" value="0" id="s${id}_${n}_1" style="text-align:center"><span style="flex:0 0 auto">–</span>
-    <input type="number" min="0" value="0" id="s${id}_${n}_2" style="text-align:center"></div>`));
-}
-async function saveGrid(id){
-  const rows=document.getElementById("gridrows"+id); const n=+rows.dataset.n; const sets=[];
-  for(let i=0;i<n;i++){sets.push([+document.getElementById(`s${id}_${i}_1`).value||0,+document.getElementById(`s${id}_${i}_2`).value||0]);}
-  const err=document.getElementById("ederr"+id); err.textContent="";
-  try{ await api(`/g/${GROUP.code}/api/match/${id}/sets`,{sets}); flash(id,"Saved"); }catch(e){err.textContent=e;}
-}
-function flash(id,msg){const e=document.getElementById("ederr"+id);e.style.color="var(--live)";e.textContent=msg;setTimeout(()=>{e.style.color="";e.textContent="";},1200);}
-// point-by-point
-function pointEditor(host,m){
-  const s1=m.side1.map(p=>esc(p.name)).join(" & "), s2=m.side2.map(p=>esc(p.name)).join(" & ");
-  host.innerHTML=`<div class="pointboard"><div class="pointscore">${esc(m.point_score||"0-0")}</div>
-    <div class="server">${m.server?'🎾 '+esc(m.server)+' serving'+(m.is_tiebreak?' · tiebreak':''):''}</div></div>
-    <div class="sheet" style="justify-content:center">
-      <div class="setcol">${m.sets.map(s=>`<div class="setcell ${s.won1?'won':''}">${s.g1}</div>`).join("")}</div>
-      <div class="setcol">${m.sets.map(s=>`<div class="setcell ${s.won2?'won':''}">${s.g2}</div>`).join("")}</div></div>
-    <div class="row" style="margin-top:10px"><button class="btn sm clay" onclick="pt(${m.id},1)">Point ${s1}</button>
-    <button class="btn sm clay" onclick="pt(${m.id},2)">Point ${s2}</button></div>
-    <button class="btn sm ghost" style="margin-top:8px;width:auto" onclick="ptUndo(${m.id})">↶ Undo</button>`;
-}
-async function pt(id,side){ const m=await api(`/g/${GROUP.code}/api/match/${id}/point`,{winner_side:side});
-  const c=document.getElementById("ed"+id); c.dataset.mode="point"; render_editor(c,m); }
-async function ptUndo(id){ const m=await api(`/g/${GROUP.code}/api/match/${id}/point/undo`);
-  const c=document.getElementById("ed"+id); c.dataset.mode="point"; render_editor(c,m); }
-// tt
-function ttEditor(host,m){
-  let pairing = m.pairing?`🎾 ${esc(m.pairing.server)} serves vs ${esc(m.pairing.receiver)} · ${esc(m.pairing.sitter)} sits`:"";
-  host.innerHTML=`<div class="server">${pairing}</div>
-    <div class="row" style="margin-top:6px">${m.tally.map(t=>`<div class="setcell">${esc(t.name)}: ${t.wins}</div>`).join("")}</div>
-    <div class="note">Rates completed rounds only.</div>
-    <div class="chips" style="margin-top:8px">${m.rotation.map(r=>`<button class="btn sm clay" onclick="ttGame(${m.id},${r.id},${m.pairing?m.pairing.server_id:0})">Game: ${esc(r.name)}</button>`).join("")}</div>
-    <button class="btn sm ghost" style="margin-top:8px;width:auto" onclick="ttUndo(${m.id})">↶ Undo</button>`;
-}
-async function ttGame(id,winner,server){ const m=await api(`/g/${GROUP.code}/api/match/${id}/tt`,{winner,server});
-  render_editor(document.getElementById("ed"+id),m); }
-async function ttUndo(id){ const m=await api(`/g/${GROUP.code}/api/match/${id}/tt/undo`);
-  render_editor(document.getElementById("ed"+id),m); }
-
-async function markFinished(id){
-  const me=LS.me(GROUP.code); const err=document.getElementById("ederr"+id); err.textContent="";
-  try{ const r=await api(`/g/${GROUP.code}/api/match/${id}/finish`,{logger:me?+me:null}); loadEditors(); }
-  catch(e){err.textContent=e;}
-}
-async function delMatch(id){
-  const me=LS.me(GROUP.code);
-  try{ await api(`/g/${GROUP.code}/api/match/${id}/delete`,{player:me?+me:null}); loadEditors(); }catch(e){}
-}
-// already played
-function togglePlayed(){ const b=document.getElementById("playedBody"); b.style.display = b.style.display==="none"?"block":"none";
-  if(b.dataset.built) return; b.dataset.built=1;
-  b.innerHTML=`<div class="muted" style="margin-top:8px">Use the picker above to select players, then enter sets:</div>
-    <div id="playedRows"><div class="row" style="margin-top:6px"><input type="number" min="0" value="0" id="ps0_1" style="text-align:center"><span style="flex:0 0 auto">–</span><input type="number" min="0" value="0" id="ps0_2" style="text-align:center"></div></div>
-    <div class="row" style="margin-top:8px"><button class="btn sm ghost" onclick="addPlayedSet()">+ Add set</button><button class="btn sm" onclick="savePlayed()">Save result</button></div>
-    <div class="err" id="playedErr"></div>`;
-  b.dataset.n=1;
-}
-function addPlayedSet(){ const b=document.getElementById("playedBody"); const n=+b.dataset.n; if(n>=5)return;
-  document.getElementById("playedRows").appendChild(el(`<div class="row" style="margin-top:6px"><input type="number" min="0" value="0" id="ps${n}_1" style="text-align:center"><span style="flex:0 0 auto">–</span><input type="number" min="0" value="0" id="ps${n}_2" style="text-align:center"></div>`));
-  b.dataset.n=n+1;
-}
-async function savePlayed(){
-  const err=document.getElementById("playedErr"); err.textContent="";
-  if(NEW.picked.length!==needCount()){err.textContent="pick "+needCount()+" players above";return;}
-  const b=document.getElementById("playedBody"); const n=+b.dataset.n; const sets=[];
-  for(let i=0;i<n;i++){sets.push([+document.getElementById(`ps${i}_1`).value||0,+document.getElementById(`ps${i}_2`).value||0]);}
-  const me=LS.me(GROUP.code);
-  let body={kind:NEW.kind,logger:me?+me:NEW.picked[0],sets};
-  if(NEW.kind==="tt"){err.textContent="triple threat is scored live only";return;}
-  if(NEW.kind==="singles"){body.side1=[NEW.picked[0]];body.side2=[NEW.picked[1]];}
-  else {body.side1=[NEW.picked[0],NEW.picked[2]];body.side2=[NEW.picked[1],NEW.picked[3]];}
-  try{ await api(`/g/${GROUP.code}/api/played`,body); err.style.color="var(--live)"; err.textContent="Saved — awaiting approval"; }
-  catch(e){err.textContent=e;}
-}
-async function initLog(){
-  // gate + ratings for win prob
-  const me=LS.me(GROUP.code);
-  if(!me){ document.getElementById("gate").innerHTML=`<div class="card note">Tip: set “which player am I” in Groups so results auto-approve for you.</div>`; }
-  try{ const s=await api(`/g/${GROUP.code}/api/leaderboard?scope=group&mode=singles`);
-       [...s.ranked,...s.provisional].forEach(r=>NEW.ratings.singles[r.id]=r.rating);
-       const d=await api(`/g/${GROUP.code}/api/leaderboard?scope=group&mode=doubles`);
-       [...d.ranked,...d.provisional].forEach(r=>NEW.ratings.doubles[r.id]=r.rating);}catch(e){}
-  renderPicker(); loadEditors(); setInterval(loadEditors,3000);
-}
+function initRanks() { loadRanks(); poll(async () => { await loadRanks(); }, 5000); }
 
 // ================= GROUPS =================
-async function togglePublic(){
-  const next=!GROUP.is_public;
-  await api(`/g/${GROUP.code}/api/public`,{is_public:next}); GROUP.is_public=next;
-  const b=document.getElementById("pubBtn");
-  b.className="big-toggle "+(next?"pub":"priv");
-  b.textContent=next?"🌐 Public — on global leaderboard":"🔒 Private — members only";
-  document.getElementById("pubNote").textContent=next?"Anyone with the link can watch; your players show globally.":"Invisible. Only code-holders see it.";
+async function initGroups() {
+  const acc = document.getElementById("accountCard");
+  acc.innerHTML = `<div class="row"><div style="flex:1"><div style="font-weight:800">${esc(ME.email || "Signed in")}</div>
+    <div class="muted">You are <b>${esc(ME.player_name || "— pick in a moment")}</b> in ${esc(GROUP.name)}</div></div>
+    <button class="btn sm ghost" onclick="Auth.signOut();location.reload()">Sign out</button></div>`;
+  renderGroupRows();
 }
-function renderWho(){
-  const host=document.getElementById("whoPicker"); const me=LS.me(GROUP.code); host.innerHTML="";
-  PLAYERS.forEach(p=>host.appendChild(el(`<div class="chip ${me==p.id?'t1 sel':''}" onclick="setMe(${p.id})">${esc(p.name)}</div>`)));
-  if(!PLAYERS.length) host.innerHTML='<span class="muted">Add players in the Log tab first.</span>';
-}
-function setMe(id){ LS.setMe(GROUP.code,id); renderWho(); }
-function renderGroupsList(){
-  const host=document.getElementById("groupsList"); const gs=LS.groups(); host.innerHTML="";
-  gs.forEach(async g=>{
-    const row=el(`<div class="lbrow" style="cursor:default"><div class="nm">${esc(g.name)} <span class="tag">${g.code}</span> <span class="dw"></span></div>
-      <button class="btn sm ghost" onclick="location.href='/g/${g.code}/live'">Switch</button></div>`);
+function renderGroupRows() {
+  const host = document.getElementById("groupRows"); const gs = LS.groups(); host.innerHTML = "";
+  gs.forEach(async g => {
+    const cur = g.code === GROUP.code;
+    const row = el(`<div class="grouprow ${cur ? 'cur' : ''}">
+      <div style="flex:1"><b>${esc(g.name)}</b> <span class="tag">${g.code}</span> <span class="dw"></span></div>
+      <button class="btn sm ${g.is_public ? 'clay' : 'ghost'}" onclick="event.stopPropagation();flipPublic('${g.code}',this)">${g.is_public ? 'Public' : 'Private'}</button>
+      ${cur ? '<span class="tickmark">✓</span>' : ''}</div>`);
+    row.onclick = () => { if (!cur) location.href = "/g/" + g.code + "/live"; };
     host.appendChild(row);
-    try{const d=await api(`/g/${g.code}/api/live`); if(d.matches.length) row.querySelector(".dw").innerHTML='<span class="dot pulse"></span>';}catch(e){}
+    try { const d = await api(`/g/${g.code}/api/live`); if (d.matches.length) row.querySelector(".dw").innerHTML = '<span class="dot pulse"></span>'; } catch (e) { }
   });
-  if(!gs.length) host.innerHTML='<div class="empty">No groups saved on this device.</div>';
+  if (!gs.length) host.innerHTML = '<div class="empty">No groups yet.</div>';
 }
-async function createFromTab(){
-  const name=document.getElementById("gName2").value.trim(); const out=document.getElementById("createOut");
-  if(!name){out.textContent="name required";return;}
-  try{const g=await api("/api/group/create",{name});LS.addGroup(g);out.innerHTML=`Created <b>${g.code}</b> — <a href="/g/${g.code}/live">enter ▶</a>`;renderGroupsList();}
-  catch(e){out.textContent=e;}
+async function flipPublic(code, btn) {
+  const g = LS.groups().find(x => x.code === code); const next = !(g && g.is_public);
+  try {
+    await api(`/g/${code}/api/public`, { is_public: next });
+    if (g) { g.is_public = next; LS.add(g); }
+    if (code === GROUP.code) GROUP.is_public = next;
+    btn.className = "btn sm " + (next ? "clay" : "ghost"); btn.textContent = next ? "Public" : "Private";
+  } catch (e) { }
 }
-async function joinFromTab(){
-  const code=document.getElementById("jCode2").value.trim().toUpperCase(); const out=document.getElementById("joinOut2"); out.textContent="";
-  try{const g=await api("/api/group/join",{code});LS.addGroup(g);location.href="/g/"+g.code+"/live";}catch(e){out.textContent=e;}
+async function createGroup() {
+  const name = document.getElementById("newGroupName").value.trim(); const out = document.getElementById("createOut");
+  if (!name) { out.textContent = "name required"; return; }
+  try {
+    const g = await api("/api/group/create", { name }); LS.add(g);
+    out.innerHTML = `Created <b>${g.code}</b> — <a href="/g/${g.code}/live">enter ▶</a>`;
+    document.getElementById("codeShare").textContent = g.code; document.getElementById("codeShareBox").style.display = "block";
+    renderGroupRows();
+  } catch (e) { out.textContent = e; }
+}
+async function joinGroup() {
+  const code = document.getElementById("joinCode2").value.trim().toUpperCase(); const out = document.getElementById("joinOut2"); out.textContent = "";
+  try { const g = await api("/api/group/join", { code }); LS.add(g); location.href = "/g/" + g.code + "/live"; }
+  catch (e) { out.textContent = e; }
 }
 
 // ================= HISTORY =================
-function reqCard(m){
-  const del=m.request_type==="delete";
-  const title=del?"🗑 Delete this match?":"🎾 Approve this result?";
-  const me=LS.me(GROUP.code);
-  const mini=matchCard(m).outerHTML;
-  const chips=m.approvals.map(a=>a.approved
-    ? `<span class="chip" style="opacity:.6">✓ ${esc(a.name)}</span>`
-    : `<button class="chip ok" onclick="approve(${m.id},${a.player_id})">Approve · ${esc(a.name)}</button>`).join("");
-  const dl=m.approvals[0]?m.approvals[0].deadline:"";
-  return el(`<div class="req ${del?'del':''}"><div class="rhd">${title}<span class="count"> · until ${esc((dl||'').replace('T',' '))}</span></div>
-    <div class="rbody">${mini}<div class="approve-chips">${chips}</div></div></div>`);
+let HIST = { kind: "all", scope: "group" };
+function setHistOpt(kind, val, btn) { btn.parentElement.querySelectorAll("button").forEach(b => b.classList.remove("on")); btn.classList.add("on"); HIST[kind] = val; loadHistory(); }
+async function loadHistory() {
+  const d = await api(`/g/${GROUP.code}/api/history`);
+  const host = document.getElementById("historyList"); host.innerHTML = "";
+  let matches = d.matches;
+  if (HIST.kind !== "all") matches = matches.filter(m => m.kind === HIST.kind);
+  if (!matches.length) { host.innerHTML = `<div class="empty">No finished matches.</div>`; return; }
+  matches.forEach(m => host.appendChild(historyCard(m)));
 }
-async function approve(id,pid){ try{await api(`/g/${GROUP.code}/api/match/${id}/approve`,{player:pid}); initHistory();}catch(e){} }
-async function reqDelete(id){ const me=LS.me(GROUP.code); try{await api(`/g/${GROUP.code}/api/match/${id}/delete`,{player:me?+me:null}); initHistory();}catch(e){} }
-function storyLine(s){ if(!s)return"";
-  let bits=[]; if(s.holds||s.breaks)bits.push(`held ${s.holds}, broke ${s.breaks}`);
-  if(s.saved_game_points)bits.push(`saved ${s.saved_game_points} game pts`);
-  if(s.deuce_points)bits.push(`${s.deuce_points} deuce pts`);
-  if(s.longest_streak>=4)bits.push(`${s.longest_streak}-point run`);
-  return bits.length?`<div class="note">🎾 Live-scored · ${bits.join(" · ")}</div>`:"";
+function historyCard(m) {
+  const when = esc((m.played_on || "").replace("T", " "));
+  let title;
+  if (m.kind === "tt") title = m.rotation.map(r => esc(r.name)).join(" · ");
+  else {
+    const w1 = m.winner_side === 1, w2 = m.winner_side === 2;
+    title = `<span class="${w1 ? 'winr' : ''}">${m.side1.map(p => esc(p.name)).join(" & ")}${w1 ? ' 🏆' : ''}</span> vs
+             <span class="${w2 ? 'winr' : ''}">${m.side2.map(p => esc(p.name)).join(" & ")}${w2 ? ' 🏆' : ''}</span>`;
+  }
+  let sets = m.kind === "tt"
+    ? `<div class="ttstrip">${m.tally.map(t => `<div class="ttcell">${esc(t.name)} <b>${t.wins}</b></div>`).join("")}</div>`
+    : `<div class="sheet">${m.sets.map(s => `<div class="setcol"><div class="setcell ${s.won1 ? 'won' : ''}">${s.g1}</div><div class="setcell ${s.won2 ? 'won' : ''}">${s.g2}</div></div>`).join("")}</div>`;
+  const story = m.story ? storyLine(m.story) : "";
+  const card = el(`<div class="match">
+    <div class="names"><div class="side">${title}</div></div>${sets}
+    <div class="note">${m.kind.toUpperCase()} · <span class="whenlbl">${when}</span>
+      <button class="editdt" title="edit date/time">✎</button></div>
+    <div class="dtedit" style="display:none"><input type="datetime-local" class="dtin">
+      <button class="btn sm" >Save</button></div>${story}</div>`);
+  const editBtn = card.querySelector(".editdt");
+  editBtn.onclick = () => { const e = card.querySelector(".dtedit"); e.style.display = e.style.display === "flex" ? "none" : "flex"; e.style.gap = "6px"; e.querySelector(".dtin").value = toLocalInput(m.played_on); };
+  card.querySelector(".dtedit .btn").onclick = async () => {
+    const v = card.querySelector(".dtin").value; if (!v) return;
+    try {
+      await api(`/g/${GROUP.code}/api/match/${m.id}/date`, { played_on: v.replace("T", " ") });
+      card.querySelector(".whenlbl").textContent = v.replace("T", " ");
+      card.querySelector(".dtedit").style.display = "none";
+    } catch (e) { }
+  };
+  return card;
 }
-async function initHistory(){
-  const d=await api(`/g/${GROUP.code}/api/history`);
-  const rc=document.getElementById("requests"); rc.innerHTML="";
-  if(d.requests.length){rc.appendChild(el(`<div class="sec-title">Needs your tap</div>`)); d.requests.forEach(m=>rc.appendChild(reqCard(m)));}
-  const hl=document.getElementById("historyList"); hl.innerHTML="";
-  if(!d.matches.length){hl.innerHTML=`<div class="empty">No finished matches yet.</div>`;return;}
-  d.matches.forEach(m=>{
-    const extra = storyLine(m.story) + `<div class="row" style="margin-top:6px"><button class="btn sm danger" style="width:auto" onclick="reqDelete(${m.id})">Request delete</button></div>`;
-    hl.appendChild(matchCard(m,{extra}));
-  });
+function toLocalInput(s) { if (!s) return ""; s = s.replace(" ", "T"); return s.length >= 16 ? s.slice(0, 16) : s; }
+function storyLine(s) {
+  let bits = [];
+  if (s.holds || s.breaks) bits.push(`held ${s.holds}, broke ${s.breaks}`);
+  if (s.saved_game_points) bits.push(`saved ${s.saved_game_points} game pts`);
+  if (s.deuce_points) bits.push(`${s.deuce_points} deuce pts`);
+  if (s.longest_streak >= 4) bits.push(`${s.longest_streak}-pt run`);
+  return bits.length ? `<div class="note">🎾 Live-scored · ${bits.join(" · ")}</div>` : "";
 }
+function initHistory() { loadHistory(); }
 
 // ================= PLAYER =================
-function initPlayer(){
-  const me=LS.me(GROUP.code);
-  if(me==PLAYER.id){const b=document.getElementById("youBadge");if(b)b.innerHTML='<span class="youpill">YOU</span>';}
-  const host=document.getElementById("pmHist");
-  if(!PLAYER.matches.length){host.innerHTML='<div class="empty">No matches yet.</div>';return;}
-  host.innerHTML="";
-  PLAYER.matches.forEach(m=>host.appendChild(matchCard(m)));
+function initPlayer() {
+  const host = document.getElementById("pmHist"); if (!host) return;
+  if (ME.player_id == PLAYER.id) { const b = document.getElementById("youBadge"); if (b) b.innerHTML = '<span class="youpill">YOU</span>'; }
+  if (!PLAYER.matches.length) { host.innerHTML = '<div class="empty">No matches yet.</div>'; return; }
+  host.innerHTML = "";
+  PLAYER.matches.forEach(m => host.appendChild(historyCardStatic(m)));
+}
+function historyCardStatic(m) {
+  const when = esc((m.played_on || "").replace("T", " "));
+  let title, sets;
+  if (m.kind === "tt") { title = m.rotation.map(r => esc(r.name)).join(" · "); sets = `<div class="ttstrip">${m.tally.map(t => `<div class="ttcell">${esc(t.name)} <b>${t.wins}</b></div>`).join("")}</div>`; }
+  else {
+    const w1 = m.winner_side === 1, w2 = m.winner_side === 2;
+    title = `${m.side1.map(p => esc(p.name)).join(" & ")}${w1 ? ' 🏆' : ''} vs ${m.side2.map(p => esc(p.name)).join(" & ")}${w2 ? ' 🏆' : ''}`;
+    sets = `<div class="sheet">${m.sets.map(s => `<div class="setcol"><div class="setcell ${s.won1 ? 'won' : ''}">${s.g1}</div><div class="setcell ${s.won2 ? 'won' : ''}">${s.g2}</div></div>`).join("")}</div>`;
+  }
+  return el(`<div class="match"><div class="names"><div class="side">${title}</div></div>${sets}<div class="note">${m.kind.toUpperCase()} · ${when}</div></div>`);
 }
 
-// ---- boot ----
-document.addEventListener("DOMContentLoaded",()=>{
-  renderMyGroups();
-  const p=window.PAGE;
-  if(p==="live")initLive();
-  else if(p==="leaderboard")initLeaderboard();
-  else if(p==="log")initLog();
-  else if(p==="groups"){renderWho();renderGroupsList();}
-  else if(p==="history")initHistory();
-  else if(p==="player")initPlayer();
+// ---------- boot ----------
+document.addEventListener("DOMContentLoaded", async () => {
+  const page = window.PAGE;
+  if (page === "landing") { return initLanding(); }
+  if (!GROUP) return;
+  if (!(await authGate())) return;         // shows sign-in, reloads on success
+  try { await ensureIdentity(); } catch (e) { }
+  if (page === "live") initLive();
+  else if (page === "leaderboard") initRanks();
+  else if (page === "log") initLog();
+  else if (page === "groups") initGroups();
+  else if (page === "history") initHistory();
+  else if (page === "player") initPlayer();
 });
+
+// ---------- landing ----------
+function initLanding() {
+  const host = document.getElementById("landingContent");
+  if (window.Auth && !Auth.signedIn()) { Auth.renderSignIn(host, () => location.reload()); return; }
+  host.innerHTML = `
+    <div id="myGroups"></div>
+    <div class="card"><div style="font-weight:800;margin-bottom:8px">Join a group</div>
+      <div class="row"><input id="joinCode" maxlength="6" placeholder="6-char code" style="text-transform:uppercase">
+      <button class="btn sm clay" onclick="landJoin()">Join</button></div><div class="err" id="joinErr"></div></div>
+    <div class="card"><div style="font-weight:800;margin-bottom:8px">Create a group</div>
+      <div class="row"><input id="grpName" placeholder="group name"><button class="btn sm" onclick="landCreate()">Create</button></div>
+      <div class="err" id="createErr"></div><div id="createDone" style="display:none">
+      <div class="muted">Share this code:</div><div class="bignum" id="newCode"></div>
+      <button class="btn" style="margin-top:10px" id="enterBtn">Enter ▶</button></div></div>
+    <div class="card" style="text-align:center"><span class="muted">${esc(Auth.email())}</span> · <a href="#" onclick="Auth.signOut();location.reload();return false">sign out</a></div>`;
+  renderMyGroups();
+}
+function renderMyGroups() {
+  const host = document.getElementById("myGroups"); if (!host) return;
+  const gs = LS.groups(); if (!gs.length) { host.innerHTML = ""; return; }
+  host.innerHTML = `<div class="sec-title">Your groups</div>`;
+  const card = el(`<div class="card" style="padding:4px 4px"></div>`);
+  gs.forEach(g => card.appendChild(el(`<div class="lbrow" onclick="location.href='/g/${g.code}/live'"><div class="nm">${esc(g.name)}</div><div class="tag">${g.code}</div></div>`)));
+  host.appendChild(card);
+}
+async function landCreate() {
+  const name = document.getElementById("grpName").value.trim(); const err = document.getElementById("createErr"); err.textContent = "";
+  if (!name) { err.textContent = "name required"; return; }
+  try {
+    const g = await api("/api/group/create", { name }); LS.add(g);
+    document.getElementById("createDone").style.display = "block";
+    document.getElementById("newCode").textContent = g.code;
+    document.getElementById("enterBtn").onclick = () => location.href = "/g/" + g.code + "/live";
+  } catch (e) { err.textContent = e; }
+}
+async function landJoin() {
+  const code = document.getElementById("joinCode").value.trim().toUpperCase(); const err = document.getElementById("joinErr"); err.textContent = "";
+  try { const g = await api("/api/group/join", { code }); LS.add(g); location.href = "/g/" + g.code + "/live"; }
+  catch (e) { err.textContent = e; }
+}

@@ -1,11 +1,13 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="card">
-  <div class="side" style="font-size:18px">
+  <div class="side" style="font-size:18px;align-items:flex-start">
     <span class="avatar" style="width:34px;height:34px;font-size:15px">{{ p.name[0]|upper }}</span>
-    {{ p.name }}
-    {% if p.live %}<span class="dot pulse"></span>{% endif %}
-    <span id="youBadge"></span>
+    <div class="pn">
+      <div class="pn-game" style="font-size:20px">{{ p.name }}
+        {% if p.live %}<span class="dot pulse"></span>{% endif %}<span id="youBadge"></span></div>
+      {% if p.real_name %}<div class="pn-real">{{ p.real_name }}</div>{% endif %}
+    </div>
   </div>
   <div class="muted" style="margin-top:6px">{{ p.wins }}W · {{ p.losses }}L ·
     last 5: {% for r in p.last5 %}<b style="color:{{ 'var(--live)' if r=='W' else '#c0392b' }}">{{ r }}</b>{% endfor %}

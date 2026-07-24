@@ -25,7 +25,8 @@ players = Table(
     "players", metadata,
     Column("id", Integer, primary_key=True),
     Column("group_id", Integer, nullable=False),
-    Column("name", Text, nullable=False),
+    Column("name", Text, nullable=False),        # game name
+    Column("real_name", Text),                   # optional real name (subtext)
     Column("created_at", Text, nullable=False),
 )
 # case-insensitive uniqueness per group (mirrors "UNIQUE(group_id, name COLLATE NOCASE)")

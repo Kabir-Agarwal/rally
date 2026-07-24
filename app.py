@@ -99,9 +99,9 @@ def match_view(con, m):
     """Serialize a match for JSON / templates (scoresheet, names, live point state)."""
     mid = m["id"]
     mps = db.match_players(con, mid)
-    s1 = [{"id": r["player_id"], "name": r["name"]} for r in mps if r["side"] == 1]
-    s2 = [{"id": r["player_id"], "name": r["name"]} for r in mps if r["side"] == 2]
-    rot = [{"id": r["player_id"], "name": r["name"], "pos": r["rotation_pos"]}
+    s1 = [{"id": r["player_id"], "name": r["name"], "real_name": r["real_name"]} for r in mps if r["side"] == 1]
+    s2 = [{"id": r["player_id"], "name": r["name"], "real_name": r["real_name"]} for r in mps if r["side"] == 2]
+    rot = [{"id": r["player_id"], "name": r["name"], "real_name": r["real_name"], "pos": r["rotation_pos"]}
            for r in mps if r["rotation_pos"]]
     rot.sort(key=lambda x: x["pos"])
     v = {"id": mid, "kind": m["kind"], "status": m["status"], "played_on": m["played_on"],
@@ -123,7 +123,7 @@ def match_view(con, m):
             names = {r["id"]: r["name"] for r in rot}
             pairing = {"server": names[srv], "receiver": names[rec], "sitter": names[sit],
                        "server_id": srv, "receiver_id": rec, "sitter_id": sit}
-        v["tally"] = [{"id": r["id"], "name": r["name"], "wins": tally[r["id"]]} for r in rot]
+        v["tally"] = [{"id": r["id"], "name": r["name"], "real_name": r["real_name"], "wins": tally[r["id"]]} for r in rot]
         v["game_no"] = gi
         v["pairing"] = pairing
         v["tt_games"] = [{"server": gm["server_player_id"],
@@ -168,7 +168,7 @@ def leaderboard_rows(con, group_id, mode, group_name=None):
     for p in db.players_of(con, group_id):
         n = st[mode + "_n"].get(p["id"], 0)
         rows.append({
-            "id": p["id"], "name": p["name"],
+            "id": p["id"], "name": p["name"], "real_name": p["real_name"],
             "rating": round(st[mode].get(p["id"], START)),
             "n": n, "provisional": n < ratings.MIN_MATCHES,
             "live": p["id"] in live_ids,
@@ -397,7 +397,7 @@ def api_meta(code: str):
     players = []
     for p in db.players_of(con, g["id"]):
         players.append({
-            "id": p["id"], "name": p["name"], "live": p["id"] in live_ids,
+            "id": p["id"], "name": p["name"], "real_name": p["real_name"], "live": p["id"] in live_ids,
             "singles": round(st["singles"].get(p["id"], START)) - 1200,
             "singles_n": st["singles_n"].get(p["id"], 0),
             "doubles": round(st["doubles"].get(p["id"], START)) - 1200,
@@ -487,7 +487,7 @@ async def api_add_player(code: str, request: Request):
     con = get_con()
     g = require_group(con, code)
     try:
-        pid = db.add_player(con, g["id"], d.get("name", ""))
+        pid = db.add_player(con, g["id"], d.get("name", ""), d.get("real_name"))
     except ValueError as e:
         con.close()
         return JSONResponse({"error": str(e)}, 400)
@@ -658,13 +658,15 @@ def api_group_me(code: str, request: Request):
         con.close()
         return {"signed_in": False, "player_id": None}
     pid = db.get_link(con, g["id"], u["sub"])
-    name = None
+    name = real_name = None
     if pid:
-        row = con.execute("SELECT name FROM players WHERE id=?", (pid,)).fetchone()
-        name = row["name"] if row else None
+        row = con.execute("SELECT name, real_name FROM players WHERE id=?", (pid,)).fetchone()
+        if row:
+            name, real_name = row["name"], row["real_name"]
     con.close()
     return {"signed_in": True, "email": u.get("email"), "player_id": pid,
-            "player_name": name, "group_name": g["name"]}
+            "player_name": name, "player_real_name": real_name,
+            "provider_name": u.get("name"), "group_name": g["name"]}
 
 
 @app.post("/g/{code}/api/link")
@@ -690,8 +692,8 @@ async def api_group_link(code: str, request: Request):
 
 @app.post("/g/{code}/api/claim-name")
 async def api_claim_name(code: str, request: Request):
-    """Self-serve: choose the name your friends will see. Creates a NEW player with that
-    name and permanently links it to this account. The group code is the only gate."""
+    """Self-serve onboarding: game name (required, unique) + real name (optional). Creates a
+    NEW player and links it to this account. The group code is the only gate."""
     d = await _body(request)
     con = get_con()
     u = require_user(request, con)
@@ -702,15 +704,35 @@ async def api_claim_name(code: str, request: Request):
     name = (d.get("name") or "").strip()
     if not name:
         con.close()
-        return JSONResponse({"error": "please enter a name"}, 400)
+        return JSONResponse({"error": "please enter a game name"}, 400)
     try:
-        pid = db.add_player(con, g["id"], name)     # rejects duplicate (ci) names
+        pid = db.add_player(con, g["id"], name, d.get("real_name"))
     except ValueError:
         con.close()
-        return JSONResponse({"error": "that name is taken in this group — try another"}, 409)
+        return JSONResponse({"error": "that game name is taken in this group — try another"}, 409)
     db.set_link(con, g["id"], u["sub"], pid)
     con.close()
     return {"player_id": pid, "name": name}
+
+
+@app.post("/g/{code}/api/rename-me")
+async def api_rename_me(code: str, request: Request):
+    """Change your OWN game name and/or real name, any time (Task 1 — no admin approval)."""
+    d = await _body(request)
+    con = get_con()
+    u = require_user(request, con)
+    g = require_group(con, code)
+    pid = db.get_link(con, g["id"], u["sub"])
+    if not pid:
+        con.close()
+        return JSONResponse({"error": "you have no player in this group yet"}, 400)
+    try:
+        db.rename_player(con, pid, name=d.get("name"), real_name=d.get("real_name"))
+    except ValueError as e:
+        con.close()
+        return JSONResponse({"error": str(e)}, 409)
+    con.close()
+    return {"player_id": pid}
 
 
 # --- player page payload --------------------------------------------------
@@ -754,7 +776,7 @@ def player_payload(con, g, pid):
             last5.append("W" if won else "L")
         hist.append(v)
     return {
-        "id": pid, "name": p["name"],
+        "id": pid, "name": p["name"], "real_name": p["real_name"],
         "singles": round(st["singles"].get(pid, START)),
         "singles_n": st["singles_n"].get(pid, 0),
         "singles_prov": st["singles_n"].get(pid, 0) < ratings.MIN_MATCHES,
@@ -839,7 +861,7 @@ def admin_group_detail(request: Request, gid: int):
     if not g:
         con.close()
         raise HTTPException(404, "Not Found")
-    players = [{"id": p["id"], "name": p["name"]} for p in db.players_of(con, gid)]
+    players = [{"id": p["id"], "name": p["name"], "real_name": p["real_name"]} for p in db.players_of(con, gid)]
     ms = con.execute(
         "SELECT * FROM matches WHERE group_id=? ORDER BY COALESCE(finished_at, created_at) DESC, id DESC",
         (gid,)).fetchall()
@@ -931,7 +953,7 @@ async def admin_player_rename(request: Request, pid: int):
     d = await _admin_body(request)
     con = get_con()
     try:
-        db.rename_player(con, pid, d.get("name", ""))
+        db.rename_player(con, pid, name=d.get("name"), real_name=d.get("real_name"))
     except ValueError as e:
         con.close()
         return JSONResponse({"error": str(e)}, 400)

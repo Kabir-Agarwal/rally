@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS groups (
 CREATE TABLE IF NOT EXISTS players (
   id INTEGER PRIMARY KEY,
   group_id INTEGER NOT NULL,
-  name TEXT NOT NULL,
+  name TEXT NOT NULL,          -- GAME NAME (the handle everyone sees, unique per group)
+  real_name TEXT,             -- optional real name shown as subtext; may duplicate
   created_at TEXT NOT NULL,
   -- SQLite-dev-only: COLLATE NOCASE is not valid on Postgres. This whole SCHEMA string
   -- runs ONLY on the SQLite path (executescript). Postgres uses schema.py, where the same
@@ -223,6 +224,11 @@ def _migrate(con):
         con.commit()
     except Exception:
         pass
+    try:
+        con.execute("ALTER TABLE players ADD COLUMN real_name TEXT")
+        con.commit()
+    except Exception:
+        pass
 
 
 def init_db(path=DB_PATH):
@@ -324,15 +330,22 @@ def delete_group(con, gid):
     con.commit()
 
 
-def rename_player(con, pid, name):
-    name = (name or "").strip()
-    if not name:
-        raise ValueError("name required")
-    try:
-        con.execute("UPDATE players SET name=? WHERE id=?", (name, pid))
-        con.commit()
-    except INTEGRITY_ERRORS:
-        raise ValueError("duplicate name in this group")
+def rename_player(con, pid, name=None, real_name=None):
+    """Update a player's game name and/or real name. game name (if given) must be non-empty
+    and unique in the group; real name is optional and may duplicate. Pass real_name=""
+    to clear it."""
+    if name is not None:
+        name = name.strip()
+        if not name:
+            raise ValueError("game name required")
+        try:
+            con.execute("UPDATE players SET name=? WHERE id=?", (name, pid))
+        except INTEGRITY_ERRORS:
+            raise ValueError("that game name is taken in this group — try another")
+    if real_name is not None:
+        con.execute("UPDATE players SET real_name=? WHERE id=?",
+                    ((real_name.strip() or None), pid))
+    con.commit()
 
 
 def delete_player(con, pid):
@@ -405,14 +418,15 @@ def links_of_group(con, group_id):
 
 
 # --- players --------------------------------------------------------------
-def add_player(con, group_id, name):
-    name = name.strip()
+def add_player(con, group_id, name, real_name=None):
+    name = (name or "").strip()
     if not name:
-        raise ValueError("name required")
+        raise ValueError("game name required")
+    real_name = (real_name or "").strip() or None
     try:
         cur = con.execute(
-            "INSERT INTO players(group_id, name, created_at) VALUES(?,?,?)",
-            (group_id, name, now()),
+            "INSERT INTO players(group_id, name, real_name, created_at) VALUES(?,?,?,?)",
+            (group_id, name, real_name, now()),
         )
         con.commit()
         return cur.lastrowid
@@ -433,7 +447,7 @@ def match_row(con, mid):
 
 def match_players(con, mid):
     return con.execute(
-        "SELECT mp.*, p.name FROM match_players mp JOIN players p ON p.id=mp.player_id "
+        "SELECT mp.*, p.name, p.real_name FROM match_players mp JOIN players p ON p.id=mp.player_id "
         "WHERE mp.match_id=? ORDER BY mp.side, mp.rotation_pos, mp.player_id",
         (mid,),
     ).fetchall()

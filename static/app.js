@@ -7,6 +7,12 @@ const el = (h) => { const d = document.createElement("div"); d.innerHTML = h.tri
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const av = (n) => `<span class="avatar">${esc((n || "?")[0]).toUpperCase()}</span>`;
 const authHeaders = () => (window.Auth ? Auth.headers() : {});
+// Game name (bold) with real name as subtext underneath. No empty gap when real name is blank.
+function nameBlock(name, real) {
+  return `<div class="pn"><div class="pn-game">${esc(name)}</div>` +
+    (real ? `<div class="pn-real">${esc(real)}</div>` : "") + `</div>`;
+}
+const pBlock = (p) => nameBlock(p.name, p.real_name);
 
 async function api(url, body, method) {
   const m = method || (body ? "POST" : "GET");
@@ -82,14 +88,17 @@ async function chooseName() {
   return new Promise((resolve) => {
     const tc = document.getElementById("tabContent");
     if (tc) tc.style.display = "none";
+    const prefill = esc((ME && ME.provider_name) || "");
     const ov = el(`<div id="nameGate">
       <div class="card" style="margin-top:24px">
-        <div style="font-weight:800;font-size:18px;text-align:center">Choose your name</div>
-        <div class="muted" style="text-align:center;margin:4px 0 12px">The name your friends will see</div>
-        <input id="nmField" placeholder="e.g. Sam" autocomplete="off" maxlength="24">
+        <div style="font-weight:800;font-size:18px;text-align:center">Set up your player</div>
+        <div class="muted" style="text-align:center;margin:4px 0 12px">You can change these any time.</div>
+        <label class="fieldlab">Game name (what everyone sees)</label>
+        <input id="nmField" placeholder="e.g. Ace" autocomplete="off" maxlength="24">
+        <label class="fieldlab" style="margin-top:8px">Real name</label>
+        <input id="nmReal" placeholder="optional" autocomplete="off" maxlength="40" value="${prefill}">
         <button class="btn" style="margin-top:10px" id="nmGo">Continue</button>
         <div class="err" id="nmErr"></div>
-        <div class="muted" style="text-align:center;margin-top:10px">Only an admin can change this later.</div>
         <div style="text-align:center;margin-top:12px;font-size:13px"><a href="#" id="nmClaim">I'm already in this group</a></div>
       </div>
       <div id="claimBox"></div></div>`);
@@ -98,14 +107,15 @@ async function chooseName() {
     ov.querySelector("#nmGo").onclick = async () => {
       err.textContent = "";
       const name = ov.querySelector("#nmField").value.trim();
-      if (!name) { err.textContent = "please enter a name"; return; }
+      const real_name = ov.querySelector("#nmReal").value;
+      if (!name) { err.textContent = "please enter a game name"; return; }
       try {
-        await api(`/g/${GROUP.code}/api/claim-name`, { name });
+        await api(`/g/${GROUP.code}/api/claim-name`, { name, real_name });
         ME = await api(`/g/${GROUP.code}/api/me`);
         ov.remove(); if (tc) tc.style.display = ""; resolve(true);
       } catch (e) { err.textContent = e; }        // duplicate/empty -> message + retry
     };
-    ov.querySelector("#nmField").addEventListener("keydown", e => { if (e.key === "Enter") ov.querySelector("#nmGo").click(); });
+    ov.querySelector("#nmReal").addEventListener("keydown", e => { if (e.key === "Enter") ov.querySelector("#nmGo").click(); });
     ov.querySelector("#nmClaim").onclick = async (e) => {
       e.preventDefault();
       const box = ov.querySelector("#claimBox");
@@ -172,13 +182,13 @@ function broadcastCard(m) {
   if (m.kind === "tt") {
     const p = m.pairing;
     let head = `<div class="bhead">TRIPLE THREAT · LIVE</div>`;
-    let strip = `<div class="ttstrip">` + m.tally.map(t => `<div class="ttcell">${esc(t.name)} <b>${t.wins}</b></div>`).join("") + `</div>`;
+    let strip = `<div class="ttstrip">` + m.tally.map(t => `<div class="ttcell">${pBlock(t)}<b class="ttwins">${t.wins}</b></div>`).join("") + `</div>`;
     let line = p ? `<div class="server">Server 🎾 ${esc(p.server)} · ${esc(p.receiver)} Receiver</div>
       <div class="muted">Game ${m.game_no + 1} · ${esc(p.sitter)} sits out</div>` : "";
     return el(`<div class="bcast">${head}${strip}${line}${winBar(m.win_prob, "tt")}${m.group ? `<div class="note">${esc(m.group)}</div>` : ""}</div>`);
   }
   const w1 = m.winner_side === 1, w2 = m.winner_side === 2;
-  const side = (arr, srvId) => arr.map(p => `<div class="bname">${p.id === m.server_id ? '🎾 ' : ''}${esc(p.name)}</div>`).join("");
+  const side = (arr) => arr.map(p => `<div class="bname">${p.id === m.server_id ? '🎾 ' : ''}${pBlock(p)}</div>`).join("");
   let cols = m.sets.map(s => `<div class="setcol"><div class="setcell ${s.won1 ? 'won' : ''}">${s.g1}</div><div class="setcell ${s.won2 ? 'won' : ''}">${s.g2}</div></div>`).join("");
   let pts = (m.per_point && m.point_score) ? `<div class="ptsbox">${esc(m.point_score)}</div>` : "";
   return el(`<div class="bcast">
@@ -223,7 +233,7 @@ function rankRow(r, mePid) {
   const rating = dispFromEloRow(r);
   return `<div class="lbrow ${you ? 'you' : ''}" onclick="location.href='/g/${GROUP.code}/player/${r.id}'">
     <div class="rk">${r.rank || '–'}</div>${av(r.name)}
-    <div class="nm">${dot}${esc(r.name)}${tag}${you ? ' <span class="youpill">YOU</span>' : ''}<div class="tapstats">tap for stats</div></div>
+    <div class="nm">${dot}${pBlock(r)}${tag}${you ? ' <span class="youpill">YOU</span>' : ''}<div class="tapstats">tap for stats</div></div>
     <div class="rt">${rating}</div></div>`;
 }
 const dispFromEloRow = (r) => { const v = r.rating - 1200; return (v > 0 ? "+" : "") + v; };
@@ -236,7 +246,7 @@ function renderRanks() {
   if (ME.player_id && RANK.scope === "group") {
     const you = RANK.data.ranked.find(r => r.id == ME.player_id);
     if (you) yc.appendChild(el(`<div class="youcard" onclick="location.href='/g/${GROUP.code}/player/${you.id}'">${av(you.name)}
-      <div style="flex:1"><b>${esc(you.name)}</b> <span class="youpill">YOU</span></div>
+      <div style="flex:1">${pBlock(you)} <span class="youpill">YOU</span></div>
       <div>#${you.rank} · <b>${dispFromEloRow(you)}</b></div></div>`));
   }
   document.getElementById("rankList").innerHTML = ranked.length ? ranked.map(r => rankRow(r, ME.player_id)).join("") : `<div class="empty">No ranked players yet.</div>`;
@@ -244,22 +254,53 @@ function renderRanks() {
   provWrap.innerHTML = prov.length
     ? `<div class="sec-title">Minimum 5 matches</div><div class="card" style="padding:2px 2px">` +
       prov.map(r => `<div class="lbrow" onclick="location.href='/g/${GROUP.code}/player/${r.id}'"><div class="rk">–</div>${av(r.name)}
-        <div class="nm">${r.live ? '<span class="dot pulse"></span>' : '<span class="dotspace"></span>'}${esc(r.name)}${r.group ? `<span class="tag">${esc(r.group)}</span>` : ''}</div>
+        <div class="nm">${r.live ? '<span class="dot pulse"></span>' : '<span class="dotspace"></span>'}${pBlock(r)}${r.group ? `<span class="tag">${esc(r.group)}</span>` : ''}</div>
         <div class="rt">${dispFromEloRow(r)} <span class="pill">${r.n} of 5</span></div></div>`).join("") + `</div>`
     : "";
 }
 function initRanks() { loadRanks(); poll(async () => { await loadRanks(); }, 5000); }
 
 // ================= GROUPS =================
-async function initGroups() {
+function renderAccount() {
   const acc = document.getElementById("accountCard");
   const dn = ME.player_name || "—";
   const gname = ME.group_name || GROUP.name || "this group";
+  const real = ME.player_real_name ? `<div class="pn-real">${esc(ME.player_real_name)}</div>` : "";
   acc.innerHTML = `<div class="row">
     <span class="avatar" style="width:40px;height:40px;font-size:17px">${esc((dn[0] || "?").toUpperCase())}</span>
-    <div style="flex:1"><div style="font-weight:800;font-size:16px">${esc(dn)}</div>
+    <div style="flex:1"><div class="pn-game" style="font-size:17px">${esc(dn)}</div>${real}
       <div class="muted">${esc(ME.email || "")} · in ${esc(gname)}</div></div>
-    <button class="btn sm ghost" style="width:auto" onclick="Auth.signOut();location.reload()">Sign out</button></div>`;
+    <div class="setcol" style="gap:6px;flex:0 0 auto">
+      <button class="btn sm ghost" style="width:auto" onclick="editName()">Edit name</button>
+      <button class="btn sm ghost" style="width:auto" onclick="Auth.signOut();location.reload()">Sign out</button></div></div>
+    <div id="editNameBox"></div>`;
+}
+function editName() {
+  const box = document.getElementById("editNameBox");
+  if (box.dataset.open) { box.dataset.open = ""; box.innerHTML = ""; return; }
+  box.dataset.open = "1";
+  box.innerHTML = `<div style="border-top:1px solid var(--line);margin-top:10px;padding-top:10px">
+    <label class="fieldlab">Game name (what everyone sees)</label>
+    <input id="enGame" maxlength="24" value="${esc(ME.player_name || "")}">
+    <label class="fieldlab" style="margin-top:8px">Real name (optional)</label>
+    <input id="enReal" maxlength="40" value="${esc(ME.player_real_name || "")}">
+    <button class="btn" style="margin-top:10px" onclick="saveName()">Save</button>
+    <div class="err" id="enErr"></div></div>`;
+}
+async function saveName() {
+  const err = document.getElementById("enErr"); err.textContent = "";
+  const name = document.getElementById("enGame").value.trim();
+  const real_name = document.getElementById("enReal").value;
+  if (!name) { err.textContent = "game name is required"; return; }
+  try {
+    await api(`/g/${GROUP.code}/api/rename-me`, { name, real_name });
+    ME = await api(`/g/${GROUP.code}/api/me`);
+    setHeaderName(ME.group_name);
+    renderAccount();
+  } catch (e) { err.textContent = e; }
+}
+async function initGroups() {
+  renderAccount();
   renderGroupRows();
 }
 function renderGroupRows() {
@@ -312,21 +353,22 @@ async function loadHistory() {
   if (!matches.length) { host.innerHTML = `<div class="empty">No finished matches.</div>`; return; }
   matches.forEach(m => host.appendChild(historyCard(m)));
 }
+function teamBlocks(arr) { return arr.map(pBlock).join('<span class="amp">&</span>'); }
+function matchTitle(m) {
+  if (m.kind === "tt") return `<div class="side">${m.rotation.map(pBlock).join('<span class="amp">·</span>')}</div>`;
+  const w1 = m.winner_side === 1, w2 = m.winner_side === 2;
+  return `<div class="side ${w1 ? 'winr' : ''}">${teamBlocks(m.side1)}${w1 ? ' 🏆' : ''}</div>
+    <div class="vs">vs</div><div class="side ${w2 ? 'winr' : ''}">${teamBlocks(m.side2)}${w2 ? ' 🏆' : ''}</div>`;
+}
 function historyCard(m) {
   const when = esc((m.played_on || "").replace("T", " "));
-  let title;
-  if (m.kind === "tt") title = m.rotation.map(r => esc(r.name)).join(" · ");
-  else {
-    const w1 = m.winner_side === 1, w2 = m.winner_side === 2;
-    title = `<span class="${w1 ? 'winr' : ''}">${m.side1.map(p => esc(p.name)).join(" & ")}${w1 ? ' 🏆' : ''}</span> vs
-             <span class="${w2 ? 'winr' : ''}">${m.side2.map(p => esc(p.name)).join(" & ")}${w2 ? ' 🏆' : ''}</span>`;
-  }
+  const title = matchTitle(m);
   let sets = m.kind === "tt"
-    ? `<div class="ttstrip">${m.tally.map(t => `<div class="ttcell">${esc(t.name)} <b>${t.wins}</b></div>`).join("")}</div>`
+    ? `<div class="ttstrip">${m.tally.map(t => `<div class="ttcell">${pBlock(t)}<b class="ttwins">${t.wins}</b></div>`).join("")}</div>`
     : `<div class="sheet">${m.sets.map(s => `<div class="setcol"><div class="setcell ${s.won1 ? 'won' : ''}">${s.g1}</div><div class="setcell ${s.won2 ? 'won' : ''}">${s.g2}</div></div>`).join("")}</div>`;
   const story = m.story ? storyLine(m.story) : "";
   const card = el(`<div class="match">
-    <div class="names"><div class="side">${title}</div></div>${sets}
+    <div class="mtitle">${title}</div>${sets}
     <div class="note">${m.kind.toUpperCase()} · <span class="whenlbl">${when}</span>
       <button class="editdt" title="edit date/time">✎</button></div>
     <div class="dtedit" style="display:none"><input type="datetime-local" class="dtin">
@@ -364,14 +406,11 @@ function initPlayer() {
 }
 function historyCardStatic(m) {
   const when = esc((m.played_on || "").replace("T", " "));
-  let title, sets;
-  if (m.kind === "tt") { title = m.rotation.map(r => esc(r.name)).join(" · "); sets = `<div class="ttstrip">${m.tally.map(t => `<div class="ttcell">${esc(t.name)} <b>${t.wins}</b></div>`).join("")}</div>`; }
-  else {
-    const w1 = m.winner_side === 1, w2 = m.winner_side === 2;
-    title = `${m.side1.map(p => esc(p.name)).join(" & ")}${w1 ? ' 🏆' : ''} vs ${m.side2.map(p => esc(p.name)).join(" & ")}${w2 ? ' 🏆' : ''}`;
-    sets = `<div class="sheet">${m.sets.map(s => `<div class="setcol"><div class="setcell ${s.won1 ? 'won' : ''}">${s.g1}</div><div class="setcell ${s.won2 ? 'won' : ''}">${s.g2}</div></div>`).join("")}</div>`;
-  }
-  return el(`<div class="match"><div class="names"><div class="side">${title}</div></div>${sets}<div class="note">${m.kind.toUpperCase()} · ${when}</div></div>`);
+  const title = matchTitle(m);
+  const sets = m.kind === "tt"
+    ? `<div class="ttstrip">${m.tally.map(t => `<div class="ttcell">${pBlock(t)}<b class="ttwins">${t.wins}</b></div>`).join("")}</div>`
+    : `<div class="sheet">${m.sets.map(s => `<div class="setcol"><div class="setcell ${s.won1 ? 'won' : ''}">${s.g1}</div><div class="setcell ${s.won2 ? 'won' : ''}">${s.g2}</div></div>`).join("")}</div>`;
+  return el(`<div class="match"><div class="mtitle">${title}</div>${sets}<div class="note">${m.kind.toUpperCase()} · ${when}</div></div>`);
 }
 
 // ---------- boot ----------

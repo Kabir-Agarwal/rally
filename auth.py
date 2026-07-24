@@ -62,7 +62,10 @@ def _verify_supabase(token: str):
     try:
         with urllib.request.urlopen(req, timeout=5) as r:
             u = json.loads(r.read())
-            return {"sub": u["id"], "email": u.get("email")}
+            meta = u.get("user_metadata") or {}
+            # real name from the provider profile (Google), for pre-filling the real-name field
+            name = meta.get("full_name") or meta.get("name")
+            return {"sub": u["id"], "email": u.get("email"), "name": name}
     except Exception:
         return None
 

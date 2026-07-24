@@ -47,24 +47,26 @@ function setKind(kind, btn) {
 }
 function renderCourt() {
   const defs = slotDefs(NEW.kind);
-  const nameOf = id => (PLAYERS.find(p => p.id === id) || {}).name || "";
+  const pOf = id => PLAYERS.find(p => p.id === id) || { name: "" };
   const slotsHtml = defs.map((d, i) => {
     const pid = NEW.slots[i];
     const serves = (NEW.kind !== "tt" && NEW.firstServe === pid && pid) || (NEW.kind === "tt" && i === 0 && pid);
+    const filled = pid ? (serves ? '🎾 ' : '') + pBlock(pOf(pid)) : '<span class="muted">tap a player</span>';
     return `<div class="cslot ${d.cls} ${pid ? 'filled' : ''}" onclick="slotTap(${i})">
       <div class="cslotlab">${d.label}</div>
-      <div class="cslotname">${pid ? (serves ? '🎾 ' : '') + esc(nameOf(pid)) : '<span class="muted">tap a player</span>'}</div></div>`;
+      <div class="cslotname">${filled}</div></div>`;
   }).join("");
   const placed = NEW.slots.filter(Boolean);
   const roster = PLAYERS.map(p => {
     const sel = placed.includes(p.id);
     const live = p.live ? '<span class="dot pulse"></span>' : '';
-    return `<div class="chip ${sel ? 'sel' : ''} ${p.live ? 'busy' : ''}" onclick="rosterTap(${p.id})">${live}${esc(p.name)}</div>`;
+    const real = p.real_name ? `<span class="chip-real">${esc(p.real_name)}</span>` : '';
+    return `<div class="chip ${sel ? 'sel' : ''} ${p.live ? 'busy' : ''}" onclick="rosterTap(${p.id})">${live}${esc(p.name)}${real}</div>`;
   }).join("");
   document.getElementById("courtWrap").innerHTML =
     `<div class="court ${NEW.kind}"><div class="net"></div>${slotsHtml}</div>
-     <div class="muted" style="margin-top:8px">Tap to fill · tap a placed player for first serve 🎾 · players are added by the admin</div>
-     <div class="chips" style="margin-top:6px">${roster || '<span class="muted">No players. Ask the admin to add players.</span>'}</div>`;
+     <div class="muted" style="margin-top:8px">Tap to fill · tap a placed player for first serve 🎾</div>
+     <div class="chips" style="margin-top:6px">${roster || '<span class="muted">No players yet — sign in and set up your player.</span>'}</div>`;
   renderChem(); updateStartBtn();
 }
 function rosterTap(pid) {

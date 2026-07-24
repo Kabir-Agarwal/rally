@@ -41,6 +41,9 @@ CREATE TABLE IF NOT EXISTS players (
   group_id INTEGER NOT NULL,
   name TEXT NOT NULL,
   created_at TEXT NOT NULL,
+  -- SQLite-dev-only: COLLATE NOCASE is not valid on Postgres. This whole SCHEMA string
+  -- runs ONLY on the SQLite path (executescript). Postgres uses schema.py, where the same
+  -- case-insensitive uniqueness is a functional unique index on LOWER(name). Keep in sync.
   UNIQUE(group_id, name COLLATE NOCASE)
 );
 CREATE TABLE IF NOT EXISTS matches (
@@ -337,7 +340,7 @@ def add_player(con, group_id, name):
 
 def players_of(con, group_id):
     return con.execute(
-        "SELECT * FROM players WHERE group_id=? ORDER BY name COLLATE NOCASE", (group_id,)
+        "SELECT * FROM players WHERE group_id=? ORDER BY LOWER(name)", (group_id,)
     ).fetchall()
 
 

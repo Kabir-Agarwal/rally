@@ -260,10 +260,30 @@ async def api_auth_google(request: Request):
     return r
 
 
+@app.post("/api/auth/guest")
+async def api_auth_guest(request: Request):
+    """Fallback (mock) mode only: sign in as a UNIQUE per-device identity. The browser
+    generates and stores a random device id and reuses it, so the same phone always returns
+    as the same account. Disabled when real Supabase auth is configured."""
+    if auth.AUTH_MODE != "mock":
+        return JSONResponse({"error": "guest sign-in is disabled"}, 400)
+    d = await request.json()
+    did = (d.get("device_id") or "").strip()
+    if not did:
+        return JSONResponse({"error": "device_id required"}, 400)
+    sub = "guest:" + did
+    token = auth.mint_mock_token(sub, None)
+    con = get_con()
+    db.upsert_user(con, sub, None)
+    con.close()
+    return {"token": token}
+
+
 @app.get("/api/auth/me")
 def api_auth_me(request: Request):
     u = current_user(request)
-    return {"signed_in": bool(u), "email": u.get("email") if u else None}
+    return {"signed_in": bool(u), "email": u.get("email") if u else None,
+            "name": u.get("name") if u else None}
 
 
 # --- landing --------------------------------------------------------------

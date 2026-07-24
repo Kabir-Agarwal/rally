@@ -61,24 +61,48 @@ window.Auth = (function () {
   async function emailStart(em) { return _post("/api/auth/email/start", { email: em }); }
   async function emailVerify(em, code) { var r = await _post("/api/auth/email/verify", { email: em, code: code }); set(r.token, r.email); return r; }
 
-  function renderSignIn(host, onDone) {
-    host.innerHTML =
-      '<div class="card" style="margin-top:24px">' +
-      '  <div style="font-weight:800;font-size:18px;text-align:center">Sign in to Rally</div>' +
-      '  <div class="muted" style="text-align:center;margin:4px 0 14px">to score matches and rank players</div>' +
-      '  <button class="btn" id="auGoogle">Continue with Google</button>' +
-      '  <div class="muted" style="text-align:center;margin:12px 0 6px">or</div>' +
-      '  <div id="auEmailBox">' +
-      '    <input id="auEmail" type="email" placeholder="you@email.com" autocomplete="email">' +
-      '    <button class="btn ghost" style="margin-top:8px" id="auSend">Continue with email</button>' +
-      '  </div>' +
-      '  <div id="auOtpBox" style="display:none">' +
-      '    <div class="muted" id="auOtpNote" style="margin-bottom:6px"></div>' +
-      '    <input id="auCode" inputmode="numeric" maxlength="6" placeholder="6-digit code">' +
-      '    <button class="btn" style="margin-top:8px" id="auVerify">Verify</button>' +
-      '  </div>' +
-      '  <div class="err" id="auErr"></div>' +
-      '</div>';
+  // Fallback (mock) mode: one "Continue" that is UNIQUE PER DEVICE. A random device id is
+  // generated once and reused, so this phone always returns as the same account.
+  function deviceId() {
+    var d = localStorage.getItem("rally_device");
+    if (!d) {
+      d = (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
+        : ("d-" + Math.random().toString(36).slice(2) + Date.now().toString(36));
+      localStorage.setItem("rally_device", d);
+    }
+    return d;
+  }
+  async function guest() { var r = await _post("/api/auth/guest", { device_id: deviceId() }); set(r.token, ""); return r; }
+
+  var SHELL = function (inner) {
+    return '<div class="card" style="margin-top:24px">' +
+      '<div style="font-weight:800;font-size:18px;text-align:center">🎾 Rally</div>' +
+      '<div class="muted" style="text-align:center;margin:4px 0 14px">tennis scorer</div>' +
+      inner + '<div class="err" id="auErr"></div></div>';
+  };
+
+  async function renderSignIn(host, onDone) {
+    host.innerHTML = SHELL('<div class="muted" style="text-align:center">…</div>');
+    var cfg = await config();
+    if (cfg.mode !== "supabase") {
+      // FALLBACK: a single Continue button. No Google, no email, no code — ever.
+      host.innerHTML = SHELL('<button class="btn" id="auGo">Continue</button>');
+      var err = host.querySelector("#auErr");
+      host.querySelector("#auGo").onclick = async function () {
+        err.textContent = "";
+        try { await guest(); onDone(); } catch (e) { err.textContent = e; }
+      };
+      return;
+    }
+    // REAL: Google + email OTP. The OTP code is typed by the user and never shown on screen.
+    host.innerHTML = SHELL(
+      '<button class="btn" id="auGoogle">Continue with Google</button>' +
+      '<div class="muted" style="text-align:center;margin:12px 0 6px">or</div>' +
+      '<div id="auEmailBox"><input id="auEmail" type="email" placeholder="you@email.com" autocomplete="email">' +
+      '<button class="btn ghost" style="margin-top:8px" id="auSend">Continue with email</button></div>' +
+      '<div id="auOtpBox" style="display:none"><div class="muted" id="auOtpNote" style="margin-bottom:6px"></div>' +
+      '<input id="auCode" inputmode="numeric" maxlength="6" placeholder="6-digit code">' +
+      '<button class="btn" style="margin-top:8px" id="auVerify">Verify</button></div>');
     var err = host.querySelector("#auErr");
     var showErr = function (e) { err.textContent = e; };
     host.querySelector("#auGoogle").onclick = async function () {
@@ -93,8 +117,7 @@ window.Auth = (function () {
         if (r.error) return showErr(r.error);
         host.querySelector("#auEmailBox").style.display = "none";
         host.querySelector("#auOtpBox").style.display = "block";
-        host.querySelector("#auOtpNote").textContent =
-          r.dev_code ? ("Dev mode — your code is " + r.dev_code) : ("Code sent to " + em);
+        host.querySelector("#auOtpNote").textContent = "Code sent to " + em;   // never the code
         host.querySelector("#auVerify").onclick = async function () {
           showErr("");
           var code = host.querySelector("#auCode").value.trim();
@@ -106,7 +129,7 @@ window.Auth = (function () {
 
   return {
     token: token, email: email, signedIn: signedIn, headers: headers, signOut: signOut,
-    google: google, emailStart: emailStart, emailVerify: emailVerify,
+    google: google, guest: guest, emailStart: emailStart, emailVerify: emailVerify,
     config: config, refreshEmail: refreshEmail, renderSignIn: renderSignIn
   };
 })();

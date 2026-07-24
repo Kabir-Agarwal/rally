@@ -116,9 +116,29 @@ SQLite file `tennis.db` is created on first run (gitignored).
   live here — the smoke test `test_db_backend.py` compiles the schema for the Postgres dialect
   (no live PG), and asserts the metadata matches the SQLite SCHEMA.
 
-## V2 status: COMPLETE + onboarding revamp (Tasks 0–8 + onboarding fix)
-All v2 tasks built, tested, committed. 63 Python + 2 Node tests green. Deploy needs env vars
+## V2 status: COMPLETE + names/sign-in revamp (Tasks 0–8, onboarding, names+sign-in)
+All built, tested, committed. 73 Python + 2 Node tests green. Deploy needs env vars
 `DATABASE_URL`, `ADMIN_KEY`, and (for real sign-in) `SUPABASE_URL` + `SUPABASE_ANON_KEY`.
+
+### Names + clean sign-in (latest)
+- **Two names per player.** `players.name` = GAME NAME (bold handle, unique per group);
+  `players.real_name` = optional REAL NAME (subtext, may duplicate). Rendered as a name block
+  everywhere (Ranks, Live, History, player page, court picker, account card): game name on top,
+  real name smaller/muted under it, nothing when real name is blank. Win-prob bars use the game
+  name only (compact) — a deliberate interpretation.
+- **Self-serve, editable any time.** Onboarding = one screen, two fields (game required+unique,
+  real optional, real pre-filled from provider via `/api/auth/me` `name`). `POST /api/claim-name`
+  {name, real_name}. Users rename BOTH from the account card → `POST /g/<code>/api/rename-me`
+  (no admin, no cooldown; propagates everywhere since all views read the current player row).
+  Admin still edits both via `/admin` rename (name + real_name). Removed all "only an admin can
+  change" wording. `players.real_name` column + migration.
+- **Clean sign-in.** Fallback (no Supabase keys): the screen is ONE "Continue" button — no
+  Google/email/OTP, no dev code ever. It creates a UNIQUE PER-DEVICE identity: `auth.js`
+  generates+stores `rally_device` (crypto.randomUUID) and `POST /api/auth/guest {device_id}`
+  mints `guest:<id>`; same device always returns as the same player, two devices = two players.
+  `/api/auth/guest` is 400 in supabase mode. Real mode: "Continue with Google" (Supabase OAuth
+  redirect) + "Continue with email" (code typed, never shown). Tests: `test_names.py` (6),
+  `test_signin.py` (4). QA verified by hand in a phone browser (all 6 journey checks passed).
 
 ### Onboarding fix (latest — reverses "admin-adds-players")
 - **Sign-in is always first.** A private group shows only the sign-in screen when signed out

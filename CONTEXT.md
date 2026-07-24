@@ -116,6 +116,28 @@ SQLite file `tennis.db` is created on first run (gitignored).
   live here — the smoke test `test_db_backend.py` compiles the schema for the Postgres dialect
   (no live PG), and asserts the metadata matches the SQLite SCHEMA.
 
+## V2 remaining work (NOT started — resume here)
+These three are a coupled front-end/integration block; do them together in a focused effort.
+- **Task 4 — Supabase auth.** Google + email-OTP (no phone). No `SUPABASE_URL`/`SUPABASE_ANON_KEY`
+  in `.env` yet → build fully behind a **local mock** auth (env-gated) and add real keys at
+  deploy. Server-side JWT verify on every write; viewing public groups needs nothing. `users`
+  table maps auth-user→player per group; first-in-group "Which player are you?" pick, locked;
+  relink only via `/admin`. Remove "+ New player" from the group app; server rejects player
+  creation from non-admin routes (picker note "Players are added by the admin"). Auth-gating +
+  mock tests. NOTE: gating writes will require a mock-bypass hook so existing tests/UI still run.
+- **Task 6 — Full V2 UI (rally-v9).** Largest task. Court-shaped picker; Log tab order
+  (Start-a-live-match on top, one live match at a time, chemistry rows from pair ratings);
+  per-point-default scoring + Set-scores grid switch; TT confirm-rotation (Yes/No) driving all
+  serve attribution; Live tab read-only broadcast cards + win-probability bars (2-way & 3-way);
+  Ranks with funnel filter, 0-based display (Elo−1200), pinned own card; Player page; History
+  with funnel + inline date/time edit; Groups with account card + tap-to-switch. **Wire in the
+  Task 2 engine+sync here** (instant DOM, status chip, hydrate-once, partial updates, no reloads).
+- **Task 8 — Human QA.** After 4+6: manually exercise every flow on a phone viewport; report
+  rough edges. Depends on 4+6.
+
+Backend is already v2-ready for these: instant results (Task 5), point-dominance (Task 7),
+client engine/sync (Task 2). Final commit message for the last task is specified in the brief.
+
 ## V2 progress (task-by-task, newest first)
 - **Task 2 — Speed (core done; UI wiring pending with Task 6).**
   - 2a client scoring engine `static/engine.js` — full tennis rules (0/15/30/40, deuce/Ad,

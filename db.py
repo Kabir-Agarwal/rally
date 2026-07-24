@@ -17,8 +17,7 @@ import ratings
 
 DB_PATH = Path(__file__).parent / "tennis.db"
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # A-Z2-9, no ambiguous 0/O/1/I
-APPROVAL_HOURS = 24
-RATING_STATUSES = ("finished", "delete_requested")  # both count toward ratings
+APPROVAL_HOURS = 24  # retained constant; v2 has no approval gate (results count immediately)
 
 # Production-safe backend: DATABASE_URL (Postgres) if set, else the local SQLite file.
 # The SQLite path is byte-for-byte the original — local dev + all tests are unchanged.
@@ -51,9 +50,11 @@ CREATE TABLE IF NOT EXISTS matches (
   group_id INTEGER NOT NULL,
   played_on TEXT,
   kind TEXT NOT NULL,
-  status TEXT NOT NULL,
+  status TEXT NOT NULL,           -- 'live' | 'finished' (no approval states in v2)
   logger_player_id INTEGER,
-  created_at TEXT, started_at TEXT, finished_at TEXT
+  created_at TEXT, started_at TEXT, finished_at TEXT,
+  voided INTEGER NOT NULL DEFAULT 0,   -- admin void: kept but excluded from recompute
+  deleted INTEGER NOT NULL DEFAULT 0   -- soft delete: hidden everywhere; admin can restore
 );
 CREATE TABLE IF NOT EXISTS match_players (
   match_id INTEGER NOT NULL,
@@ -195,14 +196,29 @@ def connect(path=DB_PATH):
     return con
 
 
+def _migrate(con):
+    """Add v2 columns to pre-existing databases (idempotent). ALTER ADD COLUMN works on
+    both SQLite and Postgres; duplicate-column errors mean it's already applied."""
+    for col in ("voided INTEGER NOT NULL DEFAULT 0", "deleted INTEGER NOT NULL DEFAULT 0"):
+        try:
+            con.execute(f"ALTER TABLE matches ADD COLUMN {col}")
+            con.commit()
+        except Exception:
+            pass  # already present
+
+
 def init_db(path=DB_PATH):
     if _is_pg():
         import schema
         schema.metadata.create_all(_engine())
+        con = connect(path)
+        _migrate(con)
+        con.close()
         return
     con = connect(path)
     con.executescript(SCHEMA)
     con.commit()
+    _migrate(con)
     con.close()
 
 
@@ -399,13 +415,25 @@ def _match_to_dict(con, m):
 
 
 def rating_state(con, group_id):
-    """Rebuild rating state for a group from rating-eligible matches in finish order."""
+    """Rebuild rating state from FINISHED, non-voided, non-deleted matches in finish order.
+    Results count immediately on finish (v2: no approval gate); voided/deleted are excluded."""
     ms = con.execute(
-        "SELECT * FROM matches WHERE group_id=? AND status IN (?,?) "
+        "SELECT * FROM matches WHERE group_id=? AND status='finished' AND voided=0 AND deleted=0 "
         "ORDER BY COALESCE(finished_at, created_at), id",
-        (group_id, *RATING_STATUSES),
+        (group_id,),
     ).fetchall()
     return ratings.rebuild([_match_to_dict(con, m) for m in ms])
+
+
+# --- v2 match flags (immediate results; admin void/restore) ---------------
+def set_voided(con, mid, val):
+    con.execute("UPDATE matches SET voided=? WHERE id=?", (1 if val else 0, mid))
+    con.commit()
+
+
+def set_deleted(con, mid, val):
+    con.execute("UPDATE matches SET deleted=? WHERE id=?", (1 if val else 0, mid))
+    con.commit()
 
 
 if __name__ == "__main__":

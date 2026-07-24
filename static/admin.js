@@ -163,16 +163,20 @@ function matchAdmin(m) {
     </select>
     <button class="btn sm" onclick="mEdit(${m.id})">Save</button></div>`));
 
-  // status-specific admin actions
+  // v2 admin actions: void/unvoid (exclude from ratings), restore (undo delete)
+  if (m.voided) box.appendChild(el(`<div class="pill" style="margin-top:6px">VOIDED — excluded from ratings</div>`));
+  if (m.deleted) box.appendChild(el(`<div class="pill" style="margin-top:6px;background:#f4d6d0;color:#7a1f16">DELETED</div>`));
   const acts = el(`<div class="row" style="margin-top:6px;flex-wrap:wrap"></div>`);
-  if (m.status === "pending_approval")
-    acts.appendChild(el(`<button class="btn sm clay" style="width:auto" onclick="mForceFinish(${m.id})">Force finish</button>`));
-  if (m.status === "delete_requested") {
-    acts.appendChild(el(`<button class="btn sm ghost" style="width:auto" onclick="mCancelDelete(${m.id})">Cancel delete</button>`));
-    acts.appendChild(el(`<button class="btn sm danger" style="width:auto" onclick="mApproveDelete(${m.id})">Approve delete</button>`));
+  if (!m.deleted) {
+    acts.appendChild(m.voided
+      ? el(`<button class="btn sm clay" style="width:auto" onclick="mUnvoid(${m.id})">Unvoid</button>`)
+      : el(`<button class="btn sm ghost" style="width:auto" onclick="mVoid(${m.id})">Void</button>`));
   }
+  if (m.deleted)
+    acts.appendChild(el(`<button class="btn sm clay" style="width:auto" onclick="mRestore(${m.id})">Restore</button>`));
   box.appendChild(acts);
-  box.appendChild(danger(`Delete this match instantly — type "delete"`, "delete", `mdel${m.id}`, () => mDelete(m.id)));
+  if (!m.deleted)
+    box.appendChild(danger(`Delete this match — type "delete"`, "delete", `mdel${m.id}`, () => mDelete(m.id)));
   box.appendChild(el(`<div class="err" id="merr${m.id}"></div>`));
   return box;
 }
@@ -213,8 +217,8 @@ function mEdit(id) {
   guard(() => adminApi(`/admin/api/match/${id}/edit`, body), "merr" + id);
 }
 const mDelete = (id) => guard(() => adminApi(`/admin/api/match/${id}/delete`, {}), "merr" + id);
-const mForceFinish = (id) => guard(() => adminApi(`/admin/api/match/${id}/force-finish`, {}), "merr" + id);
-const mApproveDelete = (id) => guard(() => adminApi(`/admin/api/match/${id}/approve-delete`, {}), "merr" + id);
-const mCancelDelete = (id) => guard(() => adminApi(`/admin/api/match/${id}/cancel-delete`, {}), "merr" + id);
+const mVoid = (id) => guard(() => adminApi(`/admin/api/match/${id}/void`, {}), "merr" + id);
+const mUnvoid = (id) => guard(() => adminApi(`/admin/api/match/${id}/unvoid`, {}), "merr" + id);
+const mRestore = (id) => guard(() => adminApi(`/admin/api/match/${id}/restore`, {}), "merr" + id);
 
 document.addEventListener("DOMContentLoaded", () => { if (getKey()) boot(); });

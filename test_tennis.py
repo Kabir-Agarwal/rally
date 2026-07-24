@@ -83,16 +83,13 @@ def test_whole_history_rebuild_after_edit_and_delete():
     a, b = db.add_player(con, gid, "A"), db.add_player(con, gid, "B")
     m = logic.start_match(con, gid, "singles", [a], [b], [], a)
     logic.edit_sets(con, m, [(6, 0)])
-    logic.finish_match(con, m, a)
-    logic.approve(con, m, b)
+    logic.finish_match(con, m)
     r1 = db.rating_state(con, gid)["singles"][a]
-    # a second finished match, then delete the first -> rebuild reflects only remaining
+    # a second finished match, then soft-delete it -> rebuild reflects only remaining
     m2 = logic.start_match(con, gid, "singles", [a], [b], [], a)
     logic.edit_sets(con, m2, [(6, 4)])
-    logic.finish_match(con, m2, a)
-    logic.approve(con, m2, b)
-    logic.delete_match(con, m2, a)
-    logic.approve(con, m2, a); logic.approve(con, m2, b)  # both approve delete -> gone
+    logic.finish_match(con, m2)
+    logic.delete_match(con, m2)          # v2: immediate soft-delete, excluded from rebuild
     r2 = db.rating_state(con, gid)["singles"][a]
     assert abs(r1 - r2) < 1e-9, "rebuild from remaining history only"
 
@@ -104,59 +101,47 @@ def test_overlapping_matches_finish_order():
     # a can be in two live matches at once
     m1 = logic.start_match(con, gid, "singles", [a], [b], [], a)
     m2 = logic.start_match(con, gid, "singles", [a], [c], [], a)
-    logic.edit_sets(con, m2, [(6, 0)]); logic.finish_match(con, m2, a); logic.approve(con, m2, c)
-    logic.edit_sets(con, m1, [(6, 0)]); logic.finish_match(con, m1, a); logic.approve(con, m1, b)
+    logic.edit_sets(con, m2, [(6, 0)]); logic.finish_match(con, m2)
+    logic.edit_sets(con, m1, [(6, 0)]); logic.finish_match(con, m1)
     # order is by finished_at; both processed, a rated in both
     st = db.rating_state(con, gid)
     assert st["singles_n"][a] == 2
 
 
-# ---- approval machine ----
-def test_finish_auto_approve_logger_then_all_approve():
+# ---- v2: instant results + admin void/restore ----
+def test_finish_is_immediate_and_rated():
     con = mem()
     gid, _ = db.create_group(con, "G")
     a, b = db.add_player(con, gid, "A"), db.add_player(con, gid, "B")
     m = logic.start_match(con, gid, "singles", [a], [b], [], a)
-    logic.edit_sets(con, m, [(6, 4)]); logic.finish_match(con, m, a)
-    aps = {r["player_id"]: r["approved_at"] for r in logic.approvals_of(con, m)}
-    assert aps[a] and not aps[b]
-    logic.approve(con, m, b)
-    assert db.match_row(con, m)["status"] == "finished"
+    logic.edit_sets(con, m, [(6, 4)]); logic.finish_match(con, m)
+    assert db.match_row(con, m)["status"] == "finished"        # no pending state
+    assert db.rating_state(con, gid)["singles"][a] > 1200      # counts immediately
 
 
-def test_24h_auto_for_finish_only():
+def test_admin_void_excludes_then_unvoid_restores():
     con = mem()
     gid, _ = db.create_group(con, "G")
     a, b = db.add_player(con, gid, "A"), db.add_player(con, gid, "B")
     m = logic.start_match(con, gid, "singles", [a], [b], [], a)
-    logic.edit_sets(con, m, [(6, 4)]); logic.finish_match(con, m, a)
-    con.execute("UPDATE approvals SET deadline='2000-01-01T00:00:00' WHERE match_id=?", (m,)); con.commit()
-    logic.check_deadlines(con)
-    assert db.match_row(con, m)["status"] == "finished"
+    logic.edit_sets(con, m, [(6, 4)]); logic.finish_match(con, m)
+    logic.admin_void_match(con, m)
+    assert db.rating_state(con, gid)["singles"].get(a, 1200) == 1200   # voided excluded
+    logic.admin_unvoid_match(con, m)
+    assert db.rating_state(con, gid)["singles"][a] > 1200             # unvoid restores
 
 
-def test_delete_never_auto():
+def test_delete_immediate_soft_then_admin_restore():
     con = mem()
     gid, _ = db.create_group(con, "G")
     a, b = db.add_player(con, gid, "A"), db.add_player(con, gid, "B")
     m = logic.start_match(con, gid, "singles", [a], [b], [], a)
-    logic.edit_sets(con, m, [(6, 4)]); logic.finish_match(con, m, a); logic.approve(con, m, b)
-    logic.delete_match(con, m, a)
-    con.execute("UPDATE approvals SET deadline='2000-01-01T00:00:00' WHERE match_id=?", (m,)); con.commit()
-    logic.check_deadlines(con)  # must NOT delete
-    assert db.match_row(con, m) is not None
-    assert db.match_row(con, m)["status"] == "delete_requested"
-
-
-def test_edit_resets_approvals():
-    con = mem()
-    gid, _ = db.create_group(con, "G")
-    a, b = db.add_player(con, gid, "A"), db.add_player(con, gid, "B")
-    m = logic.start_match(con, gid, "singles", [a], [b], [], a)
-    logic.edit_sets(con, m, [(6, 4)]); logic.finish_match(con, m, a)
-    logic.edit_sets(con, m, [(6, 3)])  # edit while pending
-    aps = {r["player_id"]: r["approved_at"] for r in logic.approvals_of(con, m)}
-    assert aps[a] and not aps[b]  # logger re-auto, other reset
+    logic.edit_sets(con, m, [(6, 4)]); logic.finish_match(con, m)
+    logic.delete_match(con, m)                                  # immediate soft-delete
+    assert db.match_row(con, m)["deleted"] == 1
+    assert db.rating_state(con, gid)["singles"].get(a, 1200) == 1200
+    logic.admin_restore_match(con, m)
+    assert db.rating_state(con, gid)["singles"][a] > 1200
 
 
 def test_delete_live_immediate():
@@ -164,8 +149,8 @@ def test_delete_live_immediate():
     gid, _ = db.create_group(con, "G")
     a, b = db.add_player(con, gid, "A"), db.add_player(con, gid, "B")
     m = logic.start_match(con, gid, "singles", [a], [b], [], a)
-    assert logic.delete_match(con, m, a) == "deleted"
-    assert db.match_row(con, m) is None
+    assert logic.delete_match(con, m) == "deleted"
+    assert db.match_row(con, m)["deleted"] == 1                 # soft-deleted (restorable)
 
 
 def test_player_and_order_lock_after_start():
@@ -252,4 +237,4 @@ def test_validation_legal_sets():
     m = logic.start_match(con, gid, "singles", [a], [b], [], a)
     logic.edit_sets(con, m, [(6, 5)])           # lenient while live
     with pytest.raises(ValueError):
-        logic.finish_match(con, m, a)           # strict at finish
+        logic.finish_match(con, m)              # strict at finish

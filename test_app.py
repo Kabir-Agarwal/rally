@@ -54,9 +54,8 @@ def test_end_to_end_singles_flow(tmp_path):
     mid = c.post(f"/g/{code}/api/match/start",
                  json={"kind": "singles", "side1": [a], "side2": [b], "logger": a}).json()["id"]
     c.post(f"/g/{code}/api/match/{mid}/sets", json={"sets": [[6, 4], [6, 3]]})
-    r = c.post(f"/g/{code}/api/match/{mid}/finish", json={"logger": a}).json()
-    assert r["status"] == "pending_approval"
-    c.post(f"/g/{code}/api/match/{mid}/approve", json={"player": b})
+    r = c.post(f"/g/{code}/api/match/{mid}/finish", json={}).json()
+    assert r["status"] == "finished"                       # v2: immediate, no approval
     lb = c.get(f"/g/{code}/api/leaderboard?scope=group&mode=singles").json()
     winner = [x for x in lb["provisional"] if x["name"] == "Ann"][0]
     assert winner["rating"] > 1200

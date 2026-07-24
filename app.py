@@ -49,7 +49,7 @@ ADMIN_KEY = _load_admin_key()
 # --- helpers --------------------------------------------------------------
 def get_con():
     con = db.connect()
-    logic.check_deadlines(con)  # lazily auto-finalize expired finish approvals
+    # v2: no approval/deadline machinery — results count immediately on finish.
     return con
 
 
@@ -63,7 +63,7 @@ def require_group(con, code):
 def live_player_ids(con, group_id):
     rows = con.execute(
         "SELECT DISTINCT mp.player_id FROM match_players mp JOIN matches m ON m.id=mp.match_id "
-        "WHERE m.group_id=? AND m.status='live'", (group_id,)
+        "WHERE m.group_id=? AND m.status='live' AND m.deleted=0", (group_id,)
     ).fetchall()
     return {r["player_id"] for r in rows}
 
@@ -253,11 +253,12 @@ def page_player(request: Request, code: str, pid: int):
 def api_live(code: str):
     con = get_con()
     g = require_group(con, code)
-    live = con.execute("SELECT * FROM matches WHERE group_id=? AND status='live' ORDER BY id DESC",
-                       (g["id"],)).fetchall()
+    live = con.execute("SELECT * FROM matches WHERE group_id=? AND status='live' AND deleted=0 "
+                       "ORDER BY id DESC", (g["id"],)).fetchall()
     out = {"matches": [match_view(con, m) for m in live], "public": []}
     for pg in public_groups(con, exclude_id=g["id"]):
-        pm = con.execute("SELECT * FROM matches WHERE group_id=? AND status='live'", (pg["id"],)).fetchall()
+        pm = con.execute("SELECT * FROM matches WHERE group_id=? AND status='live' AND deleted=0",
+                         (pg["id"],)).fetchall()
         for m in pm:
             mv = match_view(con, m)
             mv["group"] = pg["name"]
@@ -275,9 +276,6 @@ def api_match(code: str, mid: int):
         con.close()
         raise HTTPException(404)
     v = match_view(con, m)
-    v["approvals"] = [{"player_id": a["player_id"], "name": a["name"],
-                       "approved": bool(a["approved_at"]), "action": a["action"],
-                       "deadline": a["deadline"]} for a in logic.approvals_of(con, mid)]
     con.close()
     return v
 
@@ -302,23 +300,18 @@ def api_history(code: str):
     con = get_con()
     g = require_group(con, code)
     rows = con.execute(
-        "SELECT * FROM matches WHERE group_id=? AND status!='live' "
+        "SELECT * FROM matches WHERE group_id=? AND status='finished' AND deleted=0 "
         "ORDER BY COALESCE(finished_at, created_at) DESC, id DESC", (g["id"],)
     ).fetchall()
-    requests, done = [], []
+    done = []
     for m in rows:
         v = match_view(con, m)
-        if m["status"] in ("pending_approval", "delete_requested"):
-            v["approvals"] = [{"player_id": a["player_id"], "name": a["name"],
-                               "approved": bool(a["approved_at"]), "action": a["action"],
-                               "deadline": a["deadline"]} for a in logic.approvals_of(con, m["id"])]
-            v["request_type"] = "delete" if m["status"] == "delete_requested" else "finish"
-            requests.append(v)
-        else:
-            v["story"] = scoring.match_story(con, m["id"]) if v.get("per_point") else None
-            done.append(v)
+        v["voided"] = bool(m["voided"])
+        v["story"] = scoring.match_story(con, m["id"]) if v.get("per_point") else None
+        done.append(v)
     con.close()
-    return {"requests": requests, "matches": done}
+    # v2: no approval/delete request cards — finished results are immediate.
+    return {"requests": [], "matches": done}
 
 
 # --- write actions (having the code = member) -----------------------------
@@ -445,11 +438,11 @@ async def api_tt_undo(code: str, mid: int):
 
 @app.post("/g/{code}/api/match/{mid}/finish")
 async def api_finish(code: str, mid: int, request: Request):
-    d = await _body(request)
+    await _body(request)
     con = get_con()
     require_group(con, code)
     try:
-        logic.finish_match(con, mid, d.get("logger"))
+        logic.finish_match(con, mid)   # v2: finished + rated immediately
     except ValueError as e:
         con.close()
         return JSONResponse({"error": str(e)}, 400)
@@ -458,24 +451,13 @@ async def api_finish(code: str, mid: int, request: Request):
     return {"status": status}
 
 
-@app.post("/g/{code}/api/match/{mid}/approve")
-async def api_approve(code: str, mid: int, request: Request):
-    d = await _body(request)
-    con = get_con()
-    require_group(con, code)
-    logic.approve(con, mid, d.get("player"))
-    m = db.match_row(con, mid)
-    con.close()
-    return {"status": m["status"] if m else "deleted"}
-
-
 @app.post("/g/{code}/api/match/{mid}/delete")
 async def api_delete(code: str, mid: int, request: Request):
-    d = await _body(request)
+    await _body(request)
     con = get_con()
     require_group(con, code)
     try:
-        res = logic.delete_match(con, mid, d.get("player"))
+        res = logic.delete_match(con, mid)   # v2: immediate soft-delete
     except ValueError as e:
         con.close()
         return JSONResponse({"error": str(e)}, 400)
@@ -502,7 +484,7 @@ def player_payload(con, g, pid):
     last5 = []
     ms = con.execute(
         "SELECT m.* FROM matches m JOIN match_players mp ON mp.match_id=m.id "
-        "WHERE mp.player_id=? AND m.status IN ('finished','delete_requested') "
+        "WHERE mp.player_id=? AND m.status='finished' AND m.voided=0 AND m.deleted=0 "
         "ORDER BY COALESCE(m.finished_at,m.created_at) DESC, m.id DESC", (pid,)
     ).fetchall()
     wins = losses = 0
@@ -575,8 +557,8 @@ def admin_page(request: Request):
 def _group_card(con, g):
     gid = g["id"]
     players = con.execute("SELECT COUNT(*) c FROM players WHERE group_id=?", (gid,)).fetchone()["c"]
-    matches = con.execute("SELECT COUNT(*) c FROM matches WHERE group_id=?", (gid,)).fetchone()["c"]
-    live = con.execute("SELECT COUNT(*) c FROM matches WHERE group_id=? AND status='live'", (gid,)).fetchone()["c"]
+    matches = con.execute("SELECT COUNT(*) c FROM matches WHERE group_id=? AND deleted=0", (gid,)).fetchone()["c"]
+    live = con.execute("SELECT COUNT(*) c FROM matches WHERE group_id=? AND status='live' AND deleted=0", (gid,)).fetchone()["c"]
     last = con.execute(
         "SELECT MAX(COALESCE(finished_at, started_at, created_at)) t FROM matches WHERE group_id=?",
         (gid,)).fetchone()["t"]
@@ -593,8 +575,8 @@ def admin_dashboard(request: Request):
     totals = {
         "groups": con.execute("SELECT COUNT(*) c FROM groups").fetchone()["c"],
         "players": con.execute("SELECT COUNT(*) c FROM players").fetchone()["c"],
-        "matches": con.execute("SELECT COUNT(*) c FROM matches").fetchone()["c"],
-        "live": con.execute("SELECT COUNT(*) c FROM matches WHERE status='live'").fetchone()["c"],
+        "matches": con.execute("SELECT COUNT(*) c FROM matches WHERE deleted=0").fetchone()["c"],
+        "live": con.execute("SELECT COUNT(*) c FROM matches WHERE status='live' AND deleted=0").fetchone()["c"],
     }
     logs = [{"at": r["at"], "action": r["action"], "target": r["target"]} for r in db.admin_logs(con)]
     con.close()
@@ -616,9 +598,8 @@ def admin_group_detail(request: Request, gid: int):
     matches = []
     for m in ms:
         v = match_view(con, m)
-        if m["status"] in ("pending_approval", "delete_requested"):
-            v["approvals"] = [{"name": a["name"], "approved": bool(a["approved_at"])}
-                              for a in logic.approvals_of(con, m["id"])]
+        v["voided"] = bool(m["voided"])
+        v["deleted"] = bool(m["deleted"])
         matches.append(v)
     card = _group_card(con, g)
     con.close()
@@ -746,40 +727,40 @@ async def admin_match_delete(request: Request, mid: int):
     return _admin_ok(con, "match.delete", f"mid={mid}")
 
 
-@app.post("/admin/api/match/{mid}/force-finish")
-async def admin_match_force_finish(request: Request, mid: int):
+@app.post("/admin/api/match/{mid}/void")
+async def admin_match_void(request: Request, mid: int):
     await _admin_body(request)
     con = get_con()
     try:
-        logic.admin_force_finish(con, mid)
+        logic.admin_void_match(con, mid)
     except ValueError as e:
         con.close()
         return JSONResponse({"error": str(e)}, 400)
-    return _admin_ok(con, "match.force_finish", f"mid={mid}")
+    return _admin_ok(con, "match.void", f"mid={mid}")
 
 
-@app.post("/admin/api/match/{mid}/approve-delete")
-async def admin_match_approve_delete(request: Request, mid: int):
+@app.post("/admin/api/match/{mid}/unvoid")
+async def admin_match_unvoid(request: Request, mid: int):
     await _admin_body(request)
     con = get_con()
     try:
-        logic.admin_approve_delete(con, mid)
+        logic.admin_unvoid_match(con, mid)
     except ValueError as e:
         con.close()
         return JSONResponse({"error": str(e)}, 400)
-    return _admin_ok(con, "match.approve_delete", f"mid={mid}")
+    return _admin_ok(con, "match.unvoid", f"mid={mid}")
 
 
-@app.post("/admin/api/match/{mid}/cancel-delete")
-async def admin_match_cancel_delete(request: Request, mid: int):
+@app.post("/admin/api/match/{mid}/restore")
+async def admin_match_restore(request: Request, mid: int):
     await _admin_body(request)
     con = get_con()
     try:
-        logic.admin_cancel_delete(con, mid)
+        logic.admin_restore_match(con, mid)
     except ValueError as e:
         con.close()
         return JSONResponse({"error": str(e)}, 400)
-    return _admin_ok(con, "match.cancel_delete", f"mid={mid}")
+    return _admin_ok(con, "match.restore", f"mid={mid}")
 
 
 if __name__ == "__main__":

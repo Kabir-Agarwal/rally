@@ -1,7 +1,7 @@
-"""Match lifecycle + approval state machine. Pure over a sqlite connection."""
+"""Match lifecycle (v2: immediate results, no approval gate). Pure over a db connection."""
 from __future__ import annotations
 import db
-from db import now, deadline_24h
+from db import now
 
 
 # --- validation -----------------------------------------------------------
@@ -57,7 +57,7 @@ def save_played(con, group_id, kind, side1, side2, rotation, sets, logger_player
     mid = start_match(con, group_id, kind, side1, side2, rotation, logger_player_id, played_on)
     if kind != "tt":
         _write_sets(con, mid, sets)
-    finish_match(con, mid, logger_player_id)
+    finish_match(con, mid)
     return mid
 
 
@@ -74,11 +74,9 @@ def _write_sets(con, mid, sets):
 
 def edit_sets(con, mid, sets):
     m = db.match_row(con, mid)
-    if m["status"] not in ("live", "pending_approval"):
-        raise ValueError("only live or pending matches are editable")
-    _write_sets(con, mid, sets)
-    if m["status"] == "pending_approval":
-        _reset_approvals(con, mid)  # editing a pending match resets approvals
+    if m["status"] not in ("live", "finished"):
+        raise ValueError("match is not editable")
+    _write_sets(con, mid, sets)  # v2: no approval reset — finished results just recompute
 
 
 def log_point(con, mid, winner_side, server_player_id):
@@ -106,144 +104,60 @@ def undo_tt_game(con, mid):
         con.commit()
 
 
-# --- approvals ------------------------------------------------------------
-def _player_ids(con, mid):
-    return [r["player_id"] for r in db.match_players(con, mid)]
-
-
-def _make_approvals(con, mid, action, auto_player_id):
-    con.execute("DELETE FROM approvals WHERE match_id=?", (mid,))
-    dl = deadline_24h()
-    for pid in _player_ids(con, mid):
-        approved = now() if pid == auto_player_id else None
-        con.execute(
-            "INSERT INTO approvals(match_id, player_id, action, approved_at, deadline) VALUES(?,?,?,?,?)",
-            (mid, pid, action, approved, dl),
-        )
-    con.commit()
-
-
-def _reset_approvals(con, mid):
-    """Re-arm finish approvals after a pending match is edited (logger re-auto-approves)."""
-    m = db.match_row(con, mid)
-    _make_approvals(con, mid, "finish", m["logger_player_id"])
-
-
-def approvals_of(con, mid):
-    return con.execute("SELECT a.*, p.name FROM approvals a JOIN players p ON p.id=a.player_id "
-                       "WHERE a.match_id=? ORDER BY a.player_id", (mid,)).fetchall()
-
-
-def _all_approved(con, mid):
-    rows = con.execute("SELECT approved_at FROM approvals WHERE match_id=?", (mid,)).fetchall()
-    return bool(rows) and all(r["approved_at"] for r in rows)
-
-
-def finish_match(con, mid, logger_player_id):
-    """Mark finished -> pending_approval; logger auto-approves; others get chips."""
+# --- finish (v2: immediate, no approval gate) -----------------------------
+def finish_match(con, mid):
+    """End a live match -> finished. Counts toward ratings IMMEDIATELY (no approvals)."""
     m = db.match_row(con, mid)
     if m["kind"] != "tt":
         validate_sets([(s["games_side1"], s["games_side2"]) for s in db.match_sets(con, mid)])
-    con.execute("UPDATE matches SET status='pending_approval' WHERE id=?", (mid,))
+    con.execute("UPDATE matches SET status='finished', finished_at=? WHERE id=?", (now(), mid))
     con.commit()
-    _make_approvals(con, mid, "finish", logger_player_id)
-    _try_finalize(con, mid)  # solo logger / already-all-approved short-circuits
 
 
-def approve(con, mid, player_id):
-    con.execute("UPDATE approvals SET approved_at=? WHERE match_id=? AND player_id=? AND approved_at IS NULL",
-                (now(), mid, player_id))
-    con.commit()
-    _try_finalize(con, mid)
+# --- delete (v2: immediate soft-delete; admin can restore) ----------------
+def delete_match(con, mid):
+    """Soft-delete immediately (any member). Hidden everywhere + out of ratings at once."""
+    if not db.match_row(con, mid):
+        raise ValueError("no such match")
+    db.set_deleted(con, mid, True)
+    return "deleted"
 
 
-def _try_finalize(con, mid):
-    m = db.match_row(con, mid)
-    if not _all_approved(con, mid):
-        return
-    action = con.execute("SELECT action FROM approvals WHERE match_id=? LIMIT 1", (mid,)).fetchone()["action"]
-    if action == "finish":
-        con.execute("UPDATE matches SET status='finished', finished_at=? WHERE id=?", (now(), mid))
-        con.execute("DELETE FROM approvals WHERE match_id=?", (mid,))
-        con.commit()
-    elif action == "delete":
-        _hard_delete(con, mid)
-
-
-def check_deadlines(con):
-    """Auto-finalize FINISH approvals past deadline. Delete approvals NEVER auto-finalize."""
-    due = con.execute(
-        "SELECT DISTINCT match_id FROM approvals WHERE action='finish' AND deadline < ?", (now(),)
-    ).fetchall()
-    for r in due:
-        mid = r["match_id"]
-        con.execute("UPDATE matches SET status='finished', finished_at=COALESCE(finished_at,?) WHERE id=?",
-                    (now(), mid))
-        con.execute("DELETE FROM approvals WHERE match_id=?", (mid,))
-    if due:
-        con.commit()
-
-
-# --- delete ---------------------------------------------------------------
-def _hard_delete(con, mid):
+def hard_delete(con, mid):
+    """Permanent removal (used by group/player cascades)."""
     for t in ("match_players", "match_sets", "tt_games", "point_logs", "approvals"):
         con.execute(f"DELETE FROM {t} WHERE match_id=?", (mid,))
     con.execute("DELETE FROM matches WHERE id=?", (mid,))
     con.commit()
 
 
-def delete_match(con, mid, requester_player_id):
-    """Live -> instant delete. Finished -> delete_requested needing ALL players (no auto)."""
-    m = db.match_row(con, mid)
-    if m["status"] == "live":
-        _hard_delete(con, mid)
-        return "deleted"
-    if m["status"] in ("finished", "pending_approval", "delete_requested"):
-        con.execute("UPDATE matches SET status='delete_requested' WHERE id=?", (mid,))
-        con.commit()
-        _make_approvals(con, mid, "delete", auto_player_id=None)  # no auto-approve
-        return "requested"
-    raise ValueError("cannot delete")
-
-
-# --- admin god-mode (bypasses the approval requirement) -------------------
+# --- admin god-mode (void/unvoid, restore, edit) --------------------------
 def admin_delete_match(con, mid):
-    """Instant hard delete of any match, regardless of status."""
+    """Admin soft-delete of any match (restorable)."""
     if not db.match_row(con, mid):
         raise ValueError("no such match")
-    _hard_delete(con, mid)
+    db.set_deleted(con, mid, True)
 
 
-def admin_force_finish(con, mid):
-    """Force a pending_approval match straight to finished + rated, now."""
-    m = db.match_row(con, mid)
-    if not m:
+def admin_restore_match(con, mid):
+    """Restore a soft-deleted match."""
+    if not db.match_row(con, mid):
         raise ValueError("no such match")
-    if m["status"] != "pending_approval":
-        raise ValueError("match is not awaiting approval")
-    con.execute("UPDATE matches SET status='finished', finished_at=COALESCE(finished_at,?) WHERE id=?",
-                (now(), mid))
-    con.execute("DELETE FROM approvals WHERE match_id=?", (mid,))
-    con.commit()
+    db.set_deleted(con, mid, False)
 
 
-def admin_approve_delete(con, mid):
-    """Execute a pending delete request immediately (no all-player approval needed)."""
-    m = db.match_row(con, mid)
-    if not m or m["status"] != "delete_requested":
-        raise ValueError("no pending delete request")
-    _hard_delete(con, mid)
+def admin_void_match(con, mid):
+    """Void a match: kept and visible, but EXCLUDED from rating recompute-on-read."""
+    if not db.match_row(con, mid):
+        raise ValueError("no such match")
+    db.set_voided(con, mid, True)
 
 
-def admin_cancel_delete(con, mid):
-    """Cancel a delete request; the match returns to finished and keeps counting."""
-    m = db.match_row(con, mid)
-    if not m or m["status"] != "delete_requested":
-        raise ValueError("no pending delete request")
-    con.execute("UPDATE matches SET status='finished', finished_at=COALESCE(finished_at,?) WHERE id=?",
-                (now(), mid))
-    con.execute("DELETE FROM approvals WHERE match_id=?", (mid,))
-    con.commit()
+def admin_unvoid_match(con, mid):
+    """Unvoid: the match counts toward ratings again."""
+    if not db.match_row(con, mid):
+        raise ValueError("no such match")
+    db.set_voided(con, mid, False)
 
 
 def admin_edit_match(con, mid, sets=None, played_on=None, kind=None):
@@ -279,49 +193,32 @@ if __name__ == "__main__":
     assert legal_set(7, 6) and legal_set(7, 5) and legal_set(6, 0)
     assert not legal_set(6, 5) and not legal_set(8, 6)
 
-    # start locks players; finish -> pending; logger auto-approved, B pending
+    # v2: finish -> immediately finished + rated (no approval gate)
     mid = start_match(con, gid, "singles", [a], [b], [], a)
     edit_sets(con, mid, [(6, 4)])
-    finish_match(con, mid, a)
-    assert db.match_row(con, mid)["status"] == "pending_approval"
-    aps = {r["player_id"]: r["approved_at"] for r in approvals_of(con, mid)}
-    assert aps[a] and not aps[b], "logger auto, other pending"
-
-    # B approves -> finished + rated
-    approve(con, mid, b)
+    finish_match(con, mid)
     assert db.match_row(con, mid)["status"] == "finished"
     st = db.rating_state(con, gid)
     assert st["singles"][a] > 1200 and st["singles"][b] < 1200
 
-    # edit of pending resets approvals
-    mid2 = start_match(con, gid, "singles", [a], [b], [], a)
-    edit_sets(con, mid2, [(6, 4)])
-    finish_match(con, mid2, a)
-    approve(con, mid2, b)  # would finish... but let's test reset before approve
-    # fresh pending for reset test
-    mid3 = start_match(con, gid, "singles", [a], [b], [], a)
-    edit_sets(con, mid3, [(6, 4)])
-    finish_match(con, mid3, a)
-    edit_sets(con, mid3, [(6, 3)])  # edit while pending
-    aps = {r["player_id"]: r["approved_at"] for r in approvals_of(con, mid3)}
-    assert aps[a] and not aps[b], "reset: logger re-auto, other pending again"
-
-    # delete live = instant
-    mlive = start_match(con, gid, "singles", [a], [b], [], a)
-    assert delete_match(con, mlive, a) == "deleted"
-    assert db.match_row(con, mlive) is None
-
-    # delete finished = request, needs ALL (no auto)
-    r = delete_match(con, mid, a)
-    assert r == "requested" and db.match_row(con, mid)["status"] == "delete_requested"
-    aps = approvals_of(con, mid)
-    assert all(not x["approved_at"] for x in aps), "delete: no auto-approve"
-    # still counts while requested
+    # delete = immediate soft-delete; out of ratings at once; admin can restore
+    delete_match(con, mid)
+    assert db.match_row(con, mid)["deleted"] == 1
     st = db.rating_state(con, gid)
-    assert mid in [m["id"] for m in con.execute("SELECT id FROM matches WHERE status='delete_requested'")]
-    # both approve -> gone
-    approve(con, mid, a)
-    approve(con, mid, b)
-    assert db.match_row(con, mid) is None
+    assert st["singles"].get(a, 1200) == 1200, "deleted match excluded from ratings"
+    admin_restore_match(con, mid)
+    assert db.match_row(con, mid)["deleted"] == 0
+    assert db.rating_state(con, gid)["singles"][a] > 1200, "restore brings it back"
+
+    # void = kept but excluded from recompute; unvoid restores it
+    admin_void_match(con, mid)
+    assert db.rating_state(con, gid)["singles"].get(a, 1200) == 1200
+    admin_unvoid_match(con, mid)
+    assert db.rating_state(con, gid)["singles"][a] > 1200
+
+    # delete of a live match is immediate too
+    mlive = start_match(con, gid, "singles", [a], [b], [], a)
+    assert delete_match(con, mlive) == "deleted"
+    assert db.match_row(con, mlive)["deleted"] == 1
 
     print("OK logic")

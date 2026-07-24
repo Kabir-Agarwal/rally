@@ -42,6 +42,8 @@ matches = Table(
     Column("created_at", Text),
     Column("started_at", Text),
     Column("finished_at", Text),
+    Column("voided", Integer, nullable=False, server_default="0"),
+    Column("deleted", Integer, nullable=False, server_default="0"),
 )
 
 match_players = Table(

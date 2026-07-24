@@ -31,8 +31,7 @@ def finished_singles(c, code, a, b, sets=[[6, 4]]):
     mid = c.post(f"/g/{code}/api/match/start",
                  json={"kind": "singles", "side1": [a], "side2": [b], "logger": a}).json()["id"]
     c.post(f"/g/{code}/api/match/{mid}/sets", json={"sets": sets})
-    c.post(f"/g/{code}/api/match/{mid}/finish", json={"logger": a})
-    c.post(f"/g/{code}/api/match/{mid}/approve", json={"player": b})
+    c.post(f"/g/{code}/api/match/{mid}/finish", json={})   # v2: immediate finished + rated
     return mid
 
 
@@ -51,9 +50,9 @@ def test_admin_auth_enforced_on_every_endpoint(tmp_path):
         ("post", "/admin/api/player/1/delete"),
         ("post", "/admin/api/match/1/edit"),
         ("post", "/admin/api/match/1/delete"),
-        ("post", "/admin/api/match/1/force-finish"),
-        ("post", "/admin/api/match/1/approve-delete"),
-        ("post", "/admin/api/match/1/cancel-delete"),
+        ("post", "/admin/api/match/1/void"),
+        ("post", "/admin/api/match/1/unvoid"),
+        ("post", "/admin/api/match/1/restore"),
     ]
     for method, url in endpoints:
         kw = {"json": {}} if method == "post" else {}
@@ -71,36 +70,49 @@ def test_wrong_key_generic_not_found(tmp_path):
     assert c.get("/admin/api/dashboard", headers=H(key)).status_code == 200
 
 
-# ---- force-finish / instant delete bypass approvals + rebuild ----
-def test_force_finish_bypasses_approval_and_rebuilds(tmp_path):
+# ---- v2: immediate results, admin void/unvoid + delete/restore, all rebuild ----
+def test_finish_is_immediate_no_approval(tmp_path):
     c, key = client(tmp_path)
     code = make_group(c, key, "FF")
     a, b = add(c, code, "Ann"), add(c, code, "Bob")
     mid = c.post(f"/g/{code}/api/match/start",
                  json={"kind": "singles", "side1": [a], "side2": [b], "logger": a}).json()["id"]
     c.post(f"/g/{code}/api/match/{mid}/sets", json={"sets": [[6, 0]]})
-    r = c.post(f"/g/{code}/api/match/{mid}/finish", json={"logger": a}).json()
-    assert r["status"] == "pending_approval"               # Bob has NOT approved
-    # admin forces it finished without Bob
-    fr = c.post(f"/admin/api/match/{mid}/force-finish", json={}, headers=H(key))
-    assert fr.status_code == 200
+    r = c.post(f"/g/{code}/api/match/{mid}/finish", json={}).json()
+    assert r["status"] == "finished"                       # immediate, no pending state
     lb = c.get(f"/g/{code}/api/leaderboard?scope=group&mode=singles").json()
-    ann = [x for x in lb["provisional"] if x["name"] == "Ann"][0]
-    assert ann["rating"] > 1200                            # rated after bypass
+    assert [x for x in lb["provisional"] if x["name"] == "Ann"][0]["rating"] > 1200
 
 
-def test_instant_delete_bypasses_and_rebuilds(tmp_path):
+def test_admin_void_unvoid_recompute(tmp_path):
+    c, key = client(tmp_path)
+    code = make_group(c, key, "VOID")
+    a, b = add(c, code, "Ann"), add(c, code, "Bob")
+    mid = finished_singles(c, code, a, b, [[6, 0]])
+    def ann_rating():
+        lb = c.get(f"/g/{code}/api/leaderboard?scope=group&mode=singles").json()
+        return [x for x in lb["provisional"] if x["name"] == "Ann"][0]["rating"]
+    assert ann_rating() > 1200
+    assert c.post(f"/admin/api/match/{mid}/void", json={}, headers=H(key)).status_code == 200
+    assert ann_rating() == 1200                            # voided excluded from recompute
+    c.post(f"/admin/api/match/{mid}/unvoid", json={}, headers=H(key))
+    assert ann_rating() > 1200                             # unvoid brings it back
+
+
+def test_admin_delete_then_restore_recompute(tmp_path):
     c, key = client(tmp_path)
     code = make_group(c, key, "DEL")
     a, b = add(c, code, "Ann"), add(c, code, "Bob")
     mid = finished_singles(c, code, a, b, [[6, 0]])
-    lb = c.get(f"/g/{code}/api/leaderboard?scope=group&mode=singles").json()
-    assert [x for x in lb["provisional"] if x["name"] == "Ann"][0]["rating"] > 1200
-    # admin instant-delete a FINISHED match (normally needs all-player approval)
-    r = c.post(f"/admin/api/match/{mid}/delete", json={}, headers=H(key))
-    assert r.status_code == 200
-    lb = c.get(f"/g/{code}/api/leaderboard?scope=group&mode=singles").json()
-    assert [x for x in lb["provisional"] if x["name"] == "Ann"][0]["rating"] == 1200  # reverted
+    def ann_rating():
+        lb = c.get(f"/g/{code}/api/leaderboard?scope=group&mode=singles").json()
+        return [x for x in lb["provisional"] if x["name"] == "Ann"][0]["rating"]
+    assert ann_rating() > 1200
+    # admin soft-delete -> excluded; then restore -> back
+    assert c.post(f"/admin/api/match/{mid}/delete", json={}, headers=H(key)).status_code == 200
+    assert ann_rating() == 1200
+    assert c.post(f"/admin/api/match/{mid}/restore", json={}, headers=H(key)).status_code == 200
+    assert ann_rating() > 1200
 
 
 # ---- cascades touch only their target ----
@@ -167,20 +179,18 @@ def test_admin_log_written_per_action(tmp_path):
     assert "group.create" in actions and "group.rename" in actions
 
 
-# ---- cancel / approve delete request ----
-def test_cancel_and_approve_delete_request(tmp_path):
+# ---- member delete is immediate; admin sees it as deleted and can restore ----
+def test_member_delete_immediate_then_admin_restore(tmp_path):
     c, key = client(tmp_path)
     code = make_group(c, key, "DR")
     a, b = add(c, code, "Ann"), add(c, code, "Bob")
     mid = finished_singles(c, code, a, b)
-    # a member requests delete on the finished match
-    c.post(f"/g/{code}/api/match/{mid}/delete", json={"player": a})
-    # admin cancels -> back to finished
-    c.post(f"/admin/api/match/{mid}/cancel-delete", json={}, headers=H(key))
-    detail = c.get(f"/admin/api/group/{[g for g in c.get('/admin/api/dashboard', headers=H(key)).json()['groups'] if g['name']=='DR'][0]['id']}", headers=H(key)).json()
-    assert detail["matches"][0]["status"] == "finished"
-    # request again, admin approves -> gone
-    c.post(f"/g/{code}/api/match/{mid}/delete", json={"player": a})
-    c.post(f"/admin/api/match/{mid}/approve-delete", json={}, headers=H(key))
-    detail = c.get(f"/admin/api/group/{[g for g in c.get('/admin/api/dashboard', headers=H(key)).json()['groups'] if g['name']=='DR'][0]['id']}", headers=H(key)).json()
-    assert detail["matches"] == []
+    gid = [g for g in c.get('/admin/api/dashboard', headers=H(key)).json()['groups'] if g['name'] == 'DR'][0]['id']
+    # a member deletes the finished match -> gone from history immediately
+    c.post(f"/g/{code}/api/match/{mid}/delete", json={})
+    assert c.get(f"/g/{code}/api/history").json()["matches"] == []
+    # admin still sees it (flagged deleted) and restores it
+    detail = c.get(f"/admin/api/group/{gid}", headers=H(key)).json()
+    assert detail["matches"][0]["deleted"] is True
+    c.post(f"/admin/api/match/{mid}/restore", json={}, headers=H(key))
+    assert len(c.get(f"/g/{code}/api/history").json()["matches"]) == 1

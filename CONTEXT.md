@@ -117,6 +117,23 @@ SQLite file `tennis.db` is created on first run (gitignored).
   (no live PG), and asserts the metadata matches the SQLite SCHEMA.
 
 ## V2 progress (task-by-task, newest first)
+- **Task 2 — Speed (core done; UI wiring pending with Task 6).**
+  - 2a client scoring engine `static/engine.js` — full tennis rules (0/15/30/40, deuce/Ad,
+    games, flexible sets, tiebreaks, undo) + Triple-Threat game/rotation. Mirrors `scoring.py`
+    exactly. Node test `test_engine.cjs`.
+  - 2b background sync queue `static/sync.js` — FIFO, async retry + exponential backoff,
+    'synced'/'saving' status callback, injectable fetch. Node test `test_sync.cjs`
+    (survives a failing POST, retries, preserves order, backoff 100/200/400/800).
+  - 2c cold-start: SQLAlchemy + psycopg confirmed **lazy** (not imported at module load;
+    verified via `sys.modules`); uvicorn import lazy. App import ~630ms, dominated by FastAPI.
+    Per-request rating recompute kept intentionally (tiny friend-group data); signature-
+    invalidated in-process cache is the documented upgrade path.
+  - 2d consistency `test_consistency.py` — same points through JS engine ≡ Python scorer ≡
+    server replay (stored `match_sets`), all identical.
+  - 2e perf `test_perf.py` — leaderboard/live/history/point endpoints all <300ms locally;
+    queue-survives-failure covered by the sync Node test.
+  - **Pending (needs the Task 6 UI):** wiring engine+queue into live scoring with the status
+    chip, hydrate-once-on-load, partial DOM updates, no mid-match reloads.
 - **Task 5 — Approvals reversed (done).** Removed the all-players approval machine + request
   cards. Match statuses are now just `live`→`finished`; **finishing counts immediately**
   (ratings/leaderboard/history). Deletes are immediate **soft-deletes** (`matches.deleted`),

@@ -100,8 +100,11 @@ async function toggleDetail(gid, code) {
   ctl.appendChild(el(`<div class="err" id="gerr${gid}"></div>`));
   host.appendChild(ctl);
 
-  // players
+  // players — admin is the ONLY place players are added
   host.appendChild(el(`<div style="font-weight:800;margin-top:12px">Players</div>`));
+  const addBox = el(`<div><div class="row" style="margin-top:6px"><input id="newp${gid}" placeholder="+ New player name">
+    <button class="btn sm" onclick="plAdd('${g.code}',${gid})">Add player</button></div><div class="err" id="addperr${gid}"></div></div>`);
+  host.appendChild(addBox);
   if (!d.players.length) host.appendChild(el(`<div class="muted">none</div>`));
   d.players.forEach(p => {
     const box = el(`<div style="border:1px solid var(--line);border-radius:10px;padding:8px;margin-top:6px"></div>`);
@@ -198,6 +201,17 @@ const grpRename = (gid) => guard(() => adminApi(`/admin/api/group/${gid}/rename`
 const grpPublic = (gid, val) => guard(() => adminApi(`/admin/api/group/${gid}/public`, { is_public: val }), "gerr" + gid);
 const grpRegen = (gid) => guard(() => adminApi(`/admin/api/group/${gid}/regen`, {}), "gerr" + gid);
 const grpDelete = (gid) => guard(() => adminApi(`/admin/api/group/${gid}/delete`, { confirm: document.getElementById("del" + gid).value }), "gerr" + gid);
+async function plAdd(code, gid) {
+  const inp = document.getElementById("newp" + gid); const name = inp.value.trim();
+  if (!name) return;
+  try {
+    const r = await fetch(`/g/${code}/api/player`, { method: "POST", headers: { "Content-Type": "application/json", "X-Admin-Key": getKey() }, body: JSON.stringify({ name }) });
+    if (r.status === 404) return lock("not found");
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { document.getElementById("addperr" + gid).textContent = j.error || "error"; return; }
+    inp.value = ""; toggleDetail(gid, code); toggleDetail(gid, code);   // refresh detail
+  } catch (e) { document.getElementById("addperr" + gid).textContent = e; }
+}
 const plRename = (pid) => guard(() => adminApi(`/admin/api/player/${pid}/rename`, { name: document.getElementById("pn" + pid).value }), "perr" + pid);
 const plDelete = (pid) => guard(() => adminApi(`/admin/api/player/${pid}/delete`, { confirm: document.getElementById("pdel" + pid).value }), "perr" + pid);
 

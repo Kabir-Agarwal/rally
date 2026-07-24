@@ -116,6 +116,17 @@ SQLite file `tennis.db` is created on first run (gitignored).
   live here — the smoke test `test_db_backend.py` compiles the schema for the Postgres dialect
   (no live PG), and asserts the metadata matches the SQLite SCHEMA.
 
+## V2 progress (task-by-task, newest first)
+- **Task 7 — Rating point-dominance (done).** Live-scored singles/doubles get a bounded
+  ±15% delta multiplier from the winner's share of total points (`ratings.dominance_multiplier`,
+  neutral at share 0.75); it scales magnitude, never flips the result. Typed matches keep
+  margin-multiplier only (no `points` key). Doubles scaling applies to both individual and
+  pair deltas. `db._match_to_dict` supplies point totals from `point_logs`. Tests:
+  `test_ratings_dominance.py`.
+- **Task 1 — Collaborator (done).** Invited `soumikdasgupta` (write) to the GitHub repo.
+- **Task 0 — SQL portability (done).** `players_of` now `ORDER BY LOWER(name)`; schema DDL
+  `COLLATE NOCASE` annotated SQLite-dev-only (Postgres uses the `LOWER(name)` unique index).
+
 ## Out of scope (v2 parking lot)
 Accounts; async challenges + duo requests; individual doubles return attribution (deuce/ad
 court); rating decay; notifications; cross-group rating math.

@@ -387,7 +387,15 @@ def _match_to_dict(con, m):
         games = [g["winner_player_id"] for g in tt_games(con, mid)]
         return {"kind": "tt", "rotation": rot, "games": games}
     sets = [(s["games_side1"], s["games_side2"]) for s in match_sets(con, mid)]
-    return {"kind": m["kind"], "side1": s1, "side2": s2, "sets": sets}
+    d = {"kind": m["kind"], "side1": s1, "side2": s2, "sets": sets}
+    # live-scored matches carry point totals -> point-dominance factor (typed matches don't)
+    pts = con.execute(
+        "SELECT winner_side, COUNT(*) c FROM point_logs WHERE match_id=? GROUP BY winner_side", (mid,)
+    ).fetchall()
+    if pts:
+        by = {r["winner_side"]: r["c"] for r in pts}
+        d["points"] = (by.get(1, 0), by.get(2, 0))
+    return d
 
 
 def rating_state(con, group_id):

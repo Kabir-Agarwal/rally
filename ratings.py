@@ -74,18 +74,32 @@ def _get(d, key):
     return d.get(key, START)
 
 
-def _apply_elo(state, mode, side1, side2, result1, m, k=K):
+DOMINANCE_CAP = 0.15  # live-scored matches: ±15% delta adjustment from point dominance
+
+
+def dominance_multiplier(winner_point_share):
+    """Map the winner's share of total points to a bounded delta multiplier.
+
+    Live-scored matches only. share 0.75 -> 1.0 (neutral); a crushing point win (share 1.0)
+    -> 1+CAP; a bare point win (share 0.5 or less) -> 1-CAP. Always > 0, so it scales the
+    delta's magnitude but NEVER flips the result. Typed matches don't call this.
+    """
+    return clamp(1.0 + 0.6 * (winner_point_share - 0.75), 1 - DOMINANCE_CAP, 1 + DOMINANCE_CAP)
+
+
+def _apply_elo(state, mode, side1, side2, result1, m, k=K, extra=1.0):
     """Apply an ELO update for a singles/doubles match to per-player ratings.
 
     side1/side2 are lists of player ids. Team rating = average; team delta computed
-    once; EACH partner moves by the FULL delta.
+    once; EACH partner moves by the FULL delta. `extra` is the optional point-dominance
+    multiplier (1.0 for typed matches).
     """
     r = state[mode]
     n = state[mode + "_n"]
     ra = sum(_get(r, p) for p in side1) / len(side1)
     rb = sum(_get(r, p) for p in side2) / len(side2)
     ea = expected(ra, rb)
-    delta = k * m * (result1 - ea)
+    delta = k * m * extra * (result1 - ea)
     for p in side1:
         r[p] = _get(r, p) + delta
         n[p] = n.get(p, 0) + 1
@@ -94,14 +108,14 @@ def _apply_elo(state, mode, side1, side2, result1, m, k=K):
         n[p] = n.get(p, 0) + 1
 
 
-def _apply_pair(state, side1, side2, result1, m):
+def _apply_pair(state, side1, side2, result1, m, extra=1.0):
     """Pair ELO: each duo has its own rating, moved only by that duo as a unit."""
     p1 = canon(*side1)
     p2 = canon(*side2)
     r = state["pairs"]
     n = state["pairs_n"]
     ea = expected(_get(r, p1), _get(r, p2))
-    delta = K * m * (result1 - ea)
+    delta = K * m * extra * (result1 - ea)
     r[p1] = _get(r, p1) + delta
     r[p2] = _get(r, p2) - delta
     n[p1] = n.get(p1, 0) + 1
@@ -162,9 +176,19 @@ def apply_match(state, match):
 
     result1, m = match_outcome(match["sets"])
     mode = "singles" if kind == "singles" else "doubles"
-    _apply_elo(state, mode, match["side1"], match["side2"], result1, m)
+    # Point-dominance (live-scored matches only): winner's share of total points nudges
+    # the delta by up to ±15%. Typed matches carry no 'points' -> extra stays 1.0.
+    extra = 1.0
+    pts = match.get("points")
+    if pts and result1 != 0.5:
+        p1, p2 = pts
+        total = p1 + p2
+        if total > 0:
+            winner_pts = p1 if result1 == 1.0 else p2
+            extra = dominance_multiplier(winner_pts / total)
+    _apply_elo(state, mode, match["side1"], match["side2"], result1, m, extra=extra)
     if kind == "doubles":
-        _apply_pair(state, match["side1"], match["side2"], result1, m)
+        _apply_pair(state, match["side1"], match["side2"], result1, m, extra=extra)
     return state
 
 

@@ -117,6 +117,9 @@ SQLite file `tennis.db` is created on first run (gitignored).
   (no live PG), and asserts the metadata matches the SQLite SCHEMA.
 
 ## V2 progress (task-by-task, newest first)
+- **Task 3 — White-line/overscroll fix (done).** `theme-color=#A94E2F`; sand background on
+  BOTH `html` and `body`; `overscroll-behavior-y:none` (+ `-webkit-`). Verified via computed
+  styles in-browser (html+body bg = sand, overscroll = none) → no white flash on scroll/fling.
 - **Task 7 — Rating point-dominance (done).** Live-scored singles/doubles get a bounded
   ±15% delta multiplier from the winner's share of total points (`ratings.dominance_multiplier`,
   neutral at share 0.75); it scales magnitude, never flips the result. Typed matches keep

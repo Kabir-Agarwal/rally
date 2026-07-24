@@ -39,7 +39,7 @@ def test_pg_url_normalisation():
     import importlib
     old = db.DATABASE_URL
     try:
-        db.DATABASE_URL = "postgres://u:p@host:5432/dbname"
+        db.DATABASE_URL = "postgres://host/db"
         db._ENGINE = None
         # build the URL string the way _engine() would, without a live connection
         url = db.DATABASE_URL

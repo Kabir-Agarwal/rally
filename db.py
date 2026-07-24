@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS tt_games (
   match_id INTEGER NOT NULL,
   game_no INTEGER NOT NULL,
   server_player_id INTEGER,
+  receiver_player_id INTEGER,   -- confirmed arrangement (sitter = the third player)
   winner_player_id INTEGER
 );
 CREATE TABLE IF NOT EXISTS point_logs (
@@ -217,6 +218,11 @@ def _migrate(con):
             con.commit()
         except Exception:
             pass  # already present
+    try:
+        con.execute("ALTER TABLE tt_games ADD COLUMN receiver_player_id INTEGER")
+        con.commit()
+    except Exception:
+        pass
 
 
 def init_db(path=DB_PATH):

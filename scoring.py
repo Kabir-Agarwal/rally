@@ -118,16 +118,18 @@ def serve_return_stats(con, group_id, player_id):
             for gno, gm in enumerate(games):
                 srv = gm["server_player_id"]
                 win = gm["winner_player_id"]
+                rec = gm["receiver_player_id"] if "receiver_player_id" in gm.keys() else None
                 if srv == player_id:
                     served += 1
                     if win == player_id:
                         held += 1
-                elif win == player_id:
-                    # returned & won a game where someone else served
+                elif rec == player_id:                 # confirmed receiver of this game
                     ret_games += 1
+                    if win == player_id:
+                        broke += 1
+                elif rec is None and win == player_id and srv is not None and srv != player_id:
+                    ret_games += 1                      # legacy: infer winner was the receiver
                     broke += 1
-                elif srv is not None and srv != player_id:
-                    ret_games += 1
             continue
         # per-point singles/doubles
         if player_id in s1:

@@ -67,6 +67,7 @@ tt_games = Table(
     Column("match_id", Integer, nullable=False),
     Column("game_no", Integer, nullable=False),
     Column("server_player_id", Integer),
+    Column("receiver_player_id", Integer),
     Column("winner_player_id", Integer),
 )
 

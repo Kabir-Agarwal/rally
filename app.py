@@ -176,6 +176,35 @@ def public_groups(con, exclude_id=None):
             if g["id"] != exclude_id]
 
 
+def win_prob_for(state, v):
+    """Win-probability per side: 2-way (singles/doubles) or 3-way (tt). Uses pair ratings
+    when both duos have 3+ pair matches, else averaged individual doubles ratings."""
+    def avg(ids, mode):
+        return sum(state[mode].get(i, START) for i in ids) / len(ids)
+    if v["kind"] == "tt":
+        rot = v.get("rotation", [])
+        weights = [10 ** (state["singles"].get(r["id"], START) / 400.0) for r in rot]
+        tot = sum(weights) or 1.0
+        return [{"label": r["name"], "pct": round(100 * weights[i] / tot)}
+                for i, r in enumerate(rot)]
+    s1 = [p["id"] for p in v["side1"]]
+    s2 = [p["id"] for p in v["side2"]]
+    n1 = " & ".join(p["name"] for p in v["side1"])
+    n2 = " & ".join(p["name"] for p in v["side2"])
+    if not s1 or not s2:
+        return []
+    if v["kind"] == "doubles" and len(s1) == 2 and len(s2) == 2:
+        p1, p2 = ratings.canon(*s1), ratings.canon(*s2)
+        if state["pairs_n"].get(p1, 0) >= 3 and state["pairs_n"].get(p2, 0) >= 3:
+            ra, rb = state["pairs"].get(p1, START), state["pairs"].get(p2, START)
+        else:
+            ra, rb = avg(s1, "doubles"), avg(s2, "doubles")
+    else:
+        ra, rb = avg(s1, "singles"), avg(s2, "singles")
+    pa = round(100 * ratings.expected(ra, rb))
+    return [{"label": n1, "pct": pa}, {"label": n2, "pct": 100 - pa}]
+
+
 # --- auth endpoints -------------------------------------------------------
 @app.get("/api/auth/config")
 def api_auth_config():
@@ -322,16 +351,49 @@ def api_live(code: str):
     g = require_group(con, code)
     live = con.execute("SELECT * FROM matches WHERE group_id=? AND status='live' AND deleted=0 "
                        "ORDER BY id DESC", (g["id"],)).fetchall()
-    out = {"matches": [match_view(con, m) for m in live], "public": []}
+    st = db.rating_state(con, g["id"])
+    mine = []
+    for m in live:
+        mv = match_view(con, m)
+        mv["win_prob"] = win_prob_for(st, mv)
+        mine.append(mv)
+    out = {"matches": mine, "public": []}
     for pg in public_groups(con, exclude_id=g["id"]):
         pm = con.execute("SELECT * FROM matches WHERE group_id=? AND status='live' AND deleted=0",
                          (pg["id"],)).fetchall()
-        for m in pm:
-            mv = match_view(con, m)
-            mv["group"] = pg["name"]
-            out["public"].append(mv)
+        if pm:
+            pst = db.rating_state(con, pg["id"])
+            for m in pm:
+                mv = match_view(con, m)
+                mv["group"] = pg["name"]
+                mv["win_prob"] = win_prob_for(pst, mv)
+                out["public"].append(mv)
     con.close()
     return out
+
+
+@app.get("/g/{code}/api/meta")
+def api_meta(code: str):
+    """Picker data: players (0-based singles/doubles ratings + live flag) and pair ratings
+    (0-based + match count) for doubles chemistry. Ratings display = Elo - 1200."""
+    con = get_con()
+    g = require_group(con, code)
+    st = db.rating_state(con, g["id"])
+    live_ids = live_player_ids(con, g["id"])
+    players = []
+    for p in db.players_of(con, g["id"]):
+        players.append({
+            "id": p["id"], "name": p["name"], "live": p["id"] in live_ids,
+            "singles": round(st["singles"].get(p["id"], START)) - 1200,
+            "singles_n": st["singles_n"].get(p["id"], 0),
+            "doubles": round(st["doubles"].get(p["id"], START)) - 1200,
+            "doubles_n": st["doubles_n"].get(p["id"], 0),
+        })
+    pairs = {}
+    for (a, b), rating in st["pairs"].items():
+        pairs[f"{a}_{b}"] = {"rating": round(rating) - 1200, "n": st["pairs_n"][(a, b)]}
+    con.close()
+    return {"players": players, "pairs": pairs, "pair_provisional": ratings.PAIR_PROVISIONAL}
 
 
 @app.get("/g/{code}/api/match/{mid}")
@@ -504,7 +566,7 @@ async def api_tt(code: str, mid: int, request: Request):
     con = get_con()
     require_user(request, con)
     require_group(con, code)
-    logic.log_tt_game(con, mid, d.get("server"), int(d["winner"]))
+    logic.log_tt_game(con, mid, d.get("server"), int(d["winner"]), d.get("receiver"))
     v = match_view(con, db.match_row(con, mid))
     con.close()
     return v

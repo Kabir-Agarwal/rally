@@ -88,11 +88,12 @@ def log_point(con, mid, winner_side, server_player_id):
     con.commit()
 
 
-def log_tt_game(con, mid, server_player_id, winner_player_id):
+def log_tt_game(con, mid, server_player_id, winner_player_id, receiver_player_id=None):
     g = con.execute("SELECT COALESCE(MAX(game_no),0)+1 FROM tt_games WHERE match_id=?", (mid,)).fetchone()[0]
     con.execute(
-        "INSERT INTO tt_games(match_id, game_no, server_player_id, winner_player_id) VALUES(?,?,?,?)",
-        (mid, g, server_player_id, winner_player_id),
+        "INSERT INTO tt_games(match_id, game_no, server_player_id, receiver_player_id, winner_player_id)"
+        " VALUES(?,?,?,?,?)",
+        (mid, g, server_player_id, receiver_player_id, winner_player_id),
     )
     con.commit()
 

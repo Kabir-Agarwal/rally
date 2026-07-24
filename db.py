@@ -93,6 +93,18 @@ CREATE TABLE IF NOT EXISTS admin_log (
   action TEXT NOT NULL,
   target TEXT
 );
+CREATE TABLE IF NOT EXISTS users (
+  auth_sub TEXT PRIMARY KEY,     -- Supabase (or mock) user id
+  email TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS player_links (
+  group_id INTEGER NOT NULL,
+  auth_sub TEXT NOT NULL,
+  player_id INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(group_id, auth_sub)    -- one identity -> one player per group (locked after pick)
+);
 """
 
 
@@ -336,6 +348,54 @@ def log_admin(con, action, target=""):
 
 def admin_logs(con, limit=100):
     return con.execute("SELECT * FROM admin_log ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+
+
+# --- identities & player links (auth) -------------------------------------
+def upsert_user(con, auth_sub, email):
+    row = con.execute("SELECT auth_sub FROM users WHERE auth_sub=?", (auth_sub,)).fetchone()
+    if row:
+        con.execute("UPDATE users SET email=? WHERE auth_sub=?", (email, auth_sub))
+    else:
+        con.execute("INSERT INTO users(auth_sub, email, created_at) VALUES(?,?,?)",
+                    (auth_sub, email, now()))
+    con.commit()
+
+
+def get_link(con, group_id, auth_sub):
+    """Return the linked player_id for this identity in this group, or None."""
+    r = con.execute("SELECT player_id FROM player_links WHERE group_id=? AND auth_sub=?",
+                    (group_id, auth_sub)).fetchone()
+    return r["player_id"] if r else None
+
+
+def set_link(con, group_id, auth_sub, player_id):
+    """First-time link (locked). Raises if this identity is already linked in this group."""
+    if get_link(con, group_id, auth_sub) is not None:
+        raise ValueError("already linked in this group")
+    con.execute("INSERT INTO player_links(group_id, auth_sub, player_id, created_at) VALUES(?,?,?,?)",
+                (group_id, auth_sub, player_id, now()))
+    con.commit()
+
+
+def admin_set_link(con, group_id, auth_sub, player_id):
+    """Admin relink: overwrite any existing link (used by /admin only)."""
+    con.execute("DELETE FROM player_links WHERE group_id=? AND auth_sub=?", (group_id, auth_sub))
+    con.execute("INSERT INTO player_links(group_id, auth_sub, player_id, created_at) VALUES(?,?,?,?)",
+                (group_id, auth_sub, player_id, now()))
+    con.commit()
+
+
+def admin_unlink(con, group_id, auth_sub):
+    con.execute("DELETE FROM player_links WHERE group_id=? AND auth_sub=?", (group_id, auth_sub))
+    con.commit()
+
+
+def links_of_group(con, group_id):
+    return con.execute(
+        "SELECT pl.auth_sub, pl.player_id, u.email, p.name FROM player_links pl "
+        "LEFT JOIN users u ON u.auth_sub=pl.auth_sub "
+        "LEFT JOIN players p ON p.id=pl.player_id WHERE pl.group_id=? ORDER BY u.email",
+        (group_id,)).fetchall()
 
 
 # --- players --------------------------------------------------------------

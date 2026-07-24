@@ -35,12 +35,26 @@ Rally picks its backend from `DATABASE_URL`:
 The schema (including `admin_log`) is defined once in `schema.py`; the rebuild-from-history
 rating logic is identical on both backends.
 
+## Auth (Supabase)
+
+Sign-in uses **Supabase Auth** — "Continue with Google" and "Continue with email" (6-digit
+OTP). No phone/SMS. Set two env vars (never commit them; keep them in untracked `.env`):
+
+- `SUPABASE_URL` — e.g. `https://<project-ref>.supabase.co`
+- `SUPABASE_ANON_KEY` — the project's public anon key (safe to expose to the browser)
+
+**If these are absent, Rally runs a built-in local mock provider** so the whole flow works
+offline: email OTP returns the code in the response (dev only), and "Continue with Google"
+signs in as a deterministic test user. Writes (scoring, starting matches, group actions)
+require sign-in; viewing public groups requires nothing. Players are added by the admin only.
+
 ## Deploy
 
-Deploy on **Render** as a web service built from this repo's `Dockerfile`. Set two env vars:
+Deploy on **Render** (or Vercel) built from this repo's `Dockerfile`. Env vars:
 
 - `DATABASE_URL` — your Supabase Postgres connection string.
 - `ADMIN_KEY` — the god-mode admin secret.
+- `SUPABASE_URL`, `SUPABASE_ANON_KEY` — for real Google/email sign-in (omit to use the mock).
 
 Nothing else is required.
 

@@ -116,15 +116,7 @@ SQLite file `tennis.db` is created on first run (gitignored).
   live here — the smoke test `test_db_backend.py` compiles the schema for the Postgres dialect
   (no live PG), and asserts the metadata matches the SQLite SCHEMA.
 
-## V2 remaining work (NOT started — resume here)
-These three are a coupled front-end/integration block; do them together in a focused effort.
-- **Task 4 — Supabase auth.** Google + email-OTP (no phone). No `SUPABASE_URL`/`SUPABASE_ANON_KEY`
-  in `.env` yet → build fully behind a **local mock** auth (env-gated) and add real keys at
-  deploy. Server-side JWT verify on every write; viewing public groups needs nothing. `users`
-  table maps auth-user→player per group; first-in-group "Which player are you?" pick, locked;
-  relink only via `/admin`. Remove "+ New player" from the group app; server rejects player
-  creation from non-admin routes (picker note "Players are added by the admin"). Auth-gating +
-  mock tests. NOTE: gating writes will require a mock-bypass hook so existing tests/UI still run.
+## V2 remaining work (resume here)
 - **Task 6 — Full V2 UI (rally-v9).** Largest task. Court-shaped picker; Log tab order
   (Start-a-live-match on top, one live match at a time, chemistry rows from pair ratings);
   per-point-default scoring + Set-scores grid switch; TT confirm-rotation (Yes/No) driving all
@@ -139,6 +131,18 @@ Backend is already v2-ready for these: instant results (Task 5), point-dominance
 client engine/sync (Task 2). Final commit message for the last task is specified in the brief.
 
 ## V2 progress (task-by-task, newest first)
+- **Task 4 — Supabase auth (backend + client module done; sign-in UI wires into Task 6).**
+  `auth.py` provider: Supabase (Google + email OTP) when `SUPABASE_URL`+`SUPABASE_ANON_KEY`
+  set, else a self-contained **local mock** (email OTP returns `dev_code`; Google = fixed
+  test user). Tokens are mock-HMAC (verified locally) or real Supabase (verified via
+  `/auth/v1/user`). `require_user` gates EVERY write (401 if not signed in); reads/public
+  viewing are open. New tables `users` + `player_links` (UNIQUE(group_id, auth_sub)). Endpoints:
+  `/api/auth/config|email/start|email/verify|google|me`, `/g/<code>/api/me`, `/g/<code>/api/link`
+  (pick-once, locked → 409 on relink), admin `/admin/api/group/<gid>/link|unlink` for relink.
+  Player creation is **admin-only**: `/g/<code>/api/player` needs a valid `X-Admin-Key` (group
+  app never sends it → 403 "Players are added by the admin."). Client `static/auth.js` (token
+  storage, inline sign-in screen, no popups). Existing test clients send a default mock bearer +
+  admin key. Tests: `test_auth.py` (7). README documents the env vars (untracked). 52 Python green.
 - **Task 2 — Speed (core done; UI wiring pending with Task 6).**
   - 2a client scoring engine `static/engine.js` — full tennis rules (0/15/30/40, deuce/Ad,
     games, flexible sets, tiebreaks, undo) + Triple-Threat game/rotation. Mirrors `scoring.py`

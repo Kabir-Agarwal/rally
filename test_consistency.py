@@ -27,7 +27,10 @@ def _client(tmp_path):
     orig = appmod.db.connect
     appmod.db.connect = lambda path=tmp_path / "t.db": orig(path)
     from fastapi.testclient import TestClient
-    return TestClient(appmod.app)
+    c = TestClient(appmod.app)
+    c.headers.update({"Authorization": "Bearer " + appmod.auth.mint_mock_token("u1", "u1@test"),
+                      "X-Admin-Key": appmod.ADMIN_KEY})
+    return c
 
 
 def _build_points():

@@ -12,7 +12,10 @@ def client(tmp_path):
     orig = appmod.db.connect
     appmod.db.connect = lambda path=tmp_path / "t.db": orig(path)
     from fastapi.testclient import TestClient
-    return TestClient(appmod.app), appmod.ADMIN_KEY
+    c = TestClient(appmod.app)
+    c.headers.update({"Authorization": "Bearer " + appmod.auth.mint_mock_token("u1", "u1@test"),
+                      "X-Admin-Key": appmod.ADMIN_KEY})
+    return c, appmod.ADMIN_KEY
 
 
 def H(key):
@@ -38,6 +41,7 @@ def finished_singles(c, code, a, b, sets=[[6, 4]]):
 # ---- auth ----
 def test_admin_auth_enforced_on_every_endpoint(tmp_path):
     c, key = client(tmp_path)
+    c.headers.pop("X-Admin-Key", None)     # this test drives the no-key / wrong-key paths
     endpoints = [
         ("get", "/admin/api/dashboard"),
         ("get", "/admin/api/group/1"),

@@ -94,3 +94,19 @@ admin_log = Table(
     Column("action", Text, nullable=False),
     Column("target", Text),
 )
+
+users = Table(
+    "users", metadata,
+    Column("auth_sub", Text, primary_key=True),
+    Column("email", Text),
+    Column("created_at", Text, nullable=False),
+)
+
+player_links = Table(
+    "player_links", metadata,
+    Column("group_id", Integer, nullable=False),
+    Column("auth_sub", Text, nullable=False),
+    Column("player_id", Integer, nullable=False),
+    Column("created_at", Text, nullable=False),
+)
+Index("ux_player_links_group_sub", player_links.c.group_id, player_links.c.auth_sub, unique=True)

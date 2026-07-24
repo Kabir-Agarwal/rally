@@ -20,6 +20,7 @@ import db
 import logic
 import scoring
 import ratings
+import auth
 from ratings import START
 
 BASE = Path(__file__).parent
@@ -58,6 +59,22 @@ def require_group(con, code):
     if not g:
         raise HTTPException(404, "group not found")
     return g
+
+
+# --- auth: writes require a verified signed-in user; reads are open ---------
+def current_user(request: Request):
+    """Return {sub, email} for a valid bearer token, else None (no error)."""
+    return auth.verify_token(auth.bearer(request))
+
+
+def require_user(request: Request, con=None):
+    """Gate a write. 401 if not signed in. Records the identity in `users`."""
+    u = current_user(request)
+    if not u:
+        raise HTTPException(401, "sign in required")
+    if con is not None:
+        db.upsert_user(con, u["sub"], u.get("email"))
+    return u
 
 
 def live_player_ids(con, group_id):
@@ -159,6 +176,53 @@ def public_groups(con, exclude_id=None):
             if g["id"] != exclude_id]
 
 
+# --- auth endpoints -------------------------------------------------------
+@app.get("/api/auth/config")
+def api_auth_config():
+    return auth.client_config()
+
+
+@app.post("/api/auth/email/start")
+async def api_auth_email_start(request: Request):
+    d = await request.json()
+    return auth.start_email_otp(d.get("email", ""))
+
+
+@app.post("/api/auth/email/verify")
+async def api_auth_email_verify(request: Request):
+    d = await request.json()
+    r = auth.verify_email_otp(d.get("email", ""), d.get("code", ""))
+    if "error" in r:
+        return JSONResponse(r, 401)
+    con = get_con()
+    u = auth.verify_token(r["token"])
+    db.upsert_user(con, u["sub"], u.get("email"))
+    con.close()
+    return r
+
+
+@app.post("/api/auth/google")
+async def api_auth_google(request: Request):
+    # Mock mode: instant deterministic sign-in. Supabase mode: real Google OAuth happens
+    # client-side; the browser then sends its token and the server just verifies it.
+    if auth.AUTH_MODE != "mock":
+        return JSONResponse({"error": "use client-side Google OAuth in supabase mode",
+                             "config": auth.client_config()}, 400)
+    d = await request.json()
+    r = auth.google_mock(d.get("email") or "tester@gmail.com")
+    con = get_con()
+    u = auth.verify_token(r["token"])
+    db.upsert_user(con, u["sub"], u.get("email"))
+    con.close()
+    return r
+
+
+@app.get("/api/auth/me")
+def api_auth_me(request: Request):
+    u = current_user(request)
+    return {"signed_in": bool(u), "email": u.get("email") if u else None}
+
+
 # --- landing --------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
 def landing(request: Request):
@@ -168,10 +232,12 @@ def landing(request: Request):
 @app.post("/api/group/create")
 async def api_create_group(request: Request):
     data = await request.json()
+    con = get_con()
+    require_user(request, con)                 # group actions require sign-in
     name = (data.get("name") or "").strip()
     if not name:
+        con.close()
         return JSONResponse({"error": "name required"}, 400)
-    con = get_con()
     gid, code = db.create_group(con, name)
     con.close()
     return {"code": code, "name": name}
@@ -181,6 +247,7 @@ async def api_create_group(request: Request):
 async def api_join_group(request: Request):
     data = await request.json()
     con = get_con()
+    require_user(request, con)                 # joining a group requires sign-in
     g = db.group_by_code(con, data.get("code", ""))
     con.close()
     if not g:
@@ -326,6 +393,7 @@ async def _body(request):
 async def api_set_public(code: str, request: Request):
     d = await _body(request)
     con = get_con()
+    require_user(request, con)
     g = require_group(con, code)
     db.set_public(con, g["id"], bool(d.get("is_public")))
     con.close()
@@ -334,6 +402,11 @@ async def api_set_public(code: str, request: Request):
 
 @app.post("/g/{code}/api/player")
 async def api_add_player(code: str, request: Request):
+    # v2: players are added by the admin only. Requires a valid admin key; the group app
+    # never sends it, so members get the note. The admin console adds players with the key.
+    key = request.headers.get("x-admin-key") or ""
+    if not key or key != ADMIN_KEY:
+        return JSONResponse({"error": "Players are added by the admin."}, 403)
     d = await _body(request)
     con = get_con()
     g = require_group(con, code)
@@ -342,6 +415,7 @@ async def api_add_player(code: str, request: Request):
     except ValueError as e:
         con.close()
         return JSONResponse({"error": str(e)}, 400)
+    db.log_admin(con, "player.add", f"gid={g['id']} name={d.get('name','').strip()}")
     con.close()
     return {"id": pid, "name": d["name"].strip()}
 
@@ -350,9 +424,14 @@ async def api_add_player(code: str, request: Request):
 async def api_start(code: str, request: Request):
     d = await _body(request)
     con = get_con()
+    require_user(request, con)
     g = require_group(con, code)
-    mid = logic.start_match(con, g["id"], d["kind"], d.get("side1", []), d.get("side2", []),
-                            d.get("rotation", []), d.get("logger"))
+    try:
+        mid = logic.start_match(con, g["id"], d["kind"], d.get("side1", []), d.get("side2", []),
+                                d.get("rotation", []), d.get("logger"))
+    except ValueError as e:
+        con.close()
+        return JSONResponse({"error": str(e)}, 400)
     con.close()
     return {"id": mid}
 
@@ -361,6 +440,7 @@ async def api_start(code: str, request: Request):
 async def api_played(code: str, request: Request):
     d = await _body(request)
     con = get_con()
+    require_user(request, con)
     g = require_group(con, code)
     try:
         mid = logic.save_played(con, g["id"], d["kind"], d.get("side1", []), d.get("side2", []),
@@ -377,6 +457,7 @@ async def api_played(code: str, request: Request):
 async def api_sets(code: str, mid: int, request: Request):
     d = await _body(request)
     con = get_con()
+    require_user(request, con)
     require_group(con, code)
     try:
         logic.edit_sets(con, mid, [(int(a), int(b)) for a, b in d.get("sets", [])])
@@ -391,6 +472,7 @@ async def api_sets(code: str, mid: int, request: Request):
 async def api_point(code: str, mid: int, request: Request):
     d = await _body(request)
     con = get_con()
+    require_user(request, con)
     require_group(con, code)
     logic.log_point(con, mid, int(d["winner_side"]), d.get("server"))
     pts = con.execute("SELECT winner_side FROM point_logs WHERE match_id=? ORDER BY seq", (mid,)).fetchall()
@@ -401,8 +483,9 @@ async def api_point(code: str, mid: int, request: Request):
 
 
 @app.post("/g/{code}/api/match/{mid}/point/undo")
-async def api_point_undo(code: str, mid: int):
+async def api_point_undo(code: str, mid: int, request: Request):
     con = get_con()
+    require_user(request, con)
     require_group(con, code)
     row = con.execute("SELECT MAX(seq) s FROM point_logs WHERE match_id=?", (mid,)).fetchone()
     if row and row["s"]:
@@ -419,6 +502,7 @@ async def api_point_undo(code: str, mid: int):
 async def api_tt(code: str, mid: int, request: Request):
     d = await _body(request)
     con = get_con()
+    require_user(request, con)
     require_group(con, code)
     logic.log_tt_game(con, mid, d.get("server"), int(d["winner"]))
     v = match_view(con, db.match_row(con, mid))
@@ -427,8 +511,9 @@ async def api_tt(code: str, mid: int, request: Request):
 
 
 @app.post("/g/{code}/api/match/{mid}/tt/undo")
-async def api_tt_undo(code: str, mid: int):
+async def api_tt_undo(code: str, mid: int, request: Request):
     con = get_con()
+    require_user(request, con)
     require_group(con, code)
     logic.undo_tt_game(con, mid)
     v = match_view(con, db.match_row(con, mid))
@@ -440,6 +525,7 @@ async def api_tt_undo(code: str, mid: int):
 async def api_finish(code: str, mid: int, request: Request):
     await _body(request)
     con = get_con()
+    require_user(request, con)
     require_group(con, code)
     try:
         logic.finish_match(con, mid)   # v2: finished + rated immediately
@@ -455,6 +541,7 @@ async def api_finish(code: str, mid: int, request: Request):
 async def api_delete(code: str, mid: int, request: Request):
     await _body(request)
     con = get_con()
+    require_user(request, con)
     require_group(con, code)
     try:
         res = logic.delete_match(con, mid)   # v2: immediate soft-delete
@@ -463,6 +550,46 @@ async def api_delete(code: str, mid: int, request: Request):
         return JSONResponse({"error": str(e)}, 400)
     con.close()
     return {"result": res}
+
+
+# --- identity <-> player linking (per group) ------------------------------
+@app.get("/g/{code}/api/me")
+def api_group_me(code: str, request: Request):
+    """Who am I in this group? {signed_in, email, player_id, player_name}."""
+    con = get_con()
+    g = require_group(con, code)
+    u = current_user(request)
+    if not u:
+        con.close()
+        return {"signed_in": False, "player_id": None}
+    pid = db.get_link(con, g["id"], u["sub"])
+    name = None
+    if pid:
+        row = con.execute("SELECT name FROM players WHERE id=?", (pid,)).fetchone()
+        name = row["name"] if row else None
+    con.close()
+    return {"signed_in": True, "email": u.get("email"), "player_id": pid, "player_name": name}
+
+
+@app.post("/g/{code}/api/link")
+async def api_group_link(code: str, request: Request):
+    """First-time 'Which player are you?' pick — locked once set."""
+    d = await _body(request)
+    con = get_con()
+    u = require_user(request, con)
+    g = require_group(con, code)
+    p = con.execute("SELECT id FROM players WHERE id=? AND group_id=?",
+                    (d.get("player_id"), g["id"])).fetchone()
+    if not p:
+        con.close()
+        return JSONResponse({"error": "unknown player"}, 400)
+    try:
+        db.set_link(con, g["id"], u["sub"], p["id"])
+    except ValueError as e:
+        con.close()
+        return JSONResponse({"error": str(e)}, 409)   # already linked (locked)
+    con.close()
+    return {"player_id": p["id"]}
 
 
 # --- player page payload --------------------------------------------------
@@ -601,9 +728,12 @@ def admin_group_detail(request: Request, gid: int):
         v["voided"] = bool(m["voided"])
         v["deleted"] = bool(m["deleted"])
         matches.append(v)
+    links = [{"auth_sub": r["auth_sub"], "email": r["email"],
+              "player_id": r["player_id"], "player_name": r["name"]}
+             for r in db.links_of_group(con, gid)]
     card = _group_card(con, g)
     con.close()
-    return {"group": card, "players": players, "matches": matches}
+    return {"group": card, "players": players, "matches": matches, "links": links}
 
 
 def _admin_ok(con, action, target):
@@ -761,6 +891,32 @@ async def admin_match_restore(request: Request, mid: int):
         con.close()
         return JSONResponse({"error": str(e)}, 400)
     return _admin_ok(con, "match.restore", f"mid={mid}")
+
+
+# --- admin relink (identity <-> player) -----------------------------------
+@app.post("/admin/api/group/{gid}/link")
+async def admin_set_link(request: Request, gid: int):
+    d = await _admin_body(request)
+    con = get_con()
+    sub = d.get("auth_sub")
+    pid = d.get("player_id")
+    if not sub or not pid:
+        con.close()
+        return JSONResponse({"error": "auth_sub and player_id required"}, 400)
+    db.admin_set_link(con, gid, sub, int(pid))
+    return _admin_ok(con, "link.set", f"gid={gid} sub={sub} -> pid={pid}")
+
+
+@app.post("/admin/api/group/{gid}/unlink")
+async def admin_unset_link(request: Request, gid: int):
+    d = await _admin_body(request)
+    con = get_con()
+    sub = d.get("auth_sub")
+    if not sub:
+        con.close()
+        return JSONResponse({"error": "auth_sub required"}, 400)
+    db.admin_unlink(con, gid, sub)
+    return _admin_ok(con, "link.unset", f"gid={gid} sub={sub}")
 
 
 if __name__ == "__main__":

@@ -10,8 +10,8 @@
 <body>
 <div class="app">
   <div class="hd">
-    <div class="name" onclick="openSwitcher()">🎾 {{ g.name }} <span class="chev">▾</span></div>
-    <div class="sub">code <b>{{ g.code }}</b>{% if g.is_public %} · public{% else %} · private{% endif %}</div>
+    <div class="name" onclick="openSwitcher()">🎾 <span id="hdName">{% if g.is_public %}{{ g.name }}{% else %}Rally{% endif %}</span> <span class="chev">▾</span></div>
+    <div class="sub" id="hdSub">{% if g.is_public %}code <b>{{ g.code }}</b> · public{% else %}tennis scorer{% endif %}</div>
     <div class="court-line"></div>
   </div>
 
@@ -31,7 +31,7 @@
     <a href="/g/{{ code }}/groups" class="{{ 'on' if t=='groups' }}"><span class="ic">👥</span>Groups</a>
     <a href="/g/{{ code }}/history" class="{{ 'on' if t=='history' }}"><span class="ic">📜</span>History</a>
   </nav>
-  <script>window.GROUP={code:"{{ g.code }}",name:"{{ g.name|e }}",is_public:{{ 'true' if g.is_public else 'false' }}};</script>
+  <script>window.GROUP={code:"{{ g.code }}",name:"{% if g.is_public %}{{ g.name|e }}{% endif %}",is_public:{{ 'true' if g.is_public else 'false' }}};</script>
 </div>
 <script src="/static/auth.js"></script>
 {% block scripts %}{% endblock %}

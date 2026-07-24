@@ -116,10 +116,30 @@ SQLite file `tennis.db` is created on first run (gitignored).
   live here — the smoke test `test_db_backend.py` compiles the schema for the Postgres dialect
   (no live PG), and asserts the metadata matches the SQLite SCHEMA.
 
-## V2 status: COMPLETE (Tasks 0–8 done)
-All nine v2 tasks are built, tested, and committed. 56 Python + 2 Node tests green. QA (Task 8)
-was run in-browser end-to-end (see the session report). Deploy still requires real Supabase
-keys (`SUPABASE_URL`/`SUPABASE_ANON_KEY`) + `DATABASE_URL` + `ADMIN_KEY` as env vars.
+## V2 status: COMPLETE + onboarding revamp (Tasks 0–8 + onboarding fix)
+All v2 tasks built, tested, committed. 63 Python + 2 Node tests green. Deploy needs env vars
+`DATABASE_URL`, `ADMIN_KEY`, and (for real sign-in) `SUPABASE_URL` + `SUPABASE_ANON_KEY`.
+
+### Onboarding fix (latest — reverses "admin-adds-players")
+- **Sign-in is always first.** A private group shows only the sign-in screen when signed out
+  and never reveals its name (header shows "Rally"; `window.GROUP.name` empty; page HTML omits
+  it). A **public** group is viewable read-only signed out (name shown, "Viewing read-only ·
+  Sign in to play" banner; Log tab gated). Header name is filled by JS from `/g/<code>/api/me`
+  (authed) once signed in.
+- **Self-serve names.** After sign-in, if unlinked, a "Choose your name" screen (text field
+  "The name your friends will see") CREATES a player and links it — endpoint
+  `POST /g/<code>/api/claim-name` (rejects empty→400, duplicate→409). Secondary "I'm already in
+  this group" link opens the existing-player picker (`/api/link`). Locked once set (re-claim →
+  409). Anyone with the code can join+name; code is the only gate. Admins still add/rename/
+  delete/link/unlink in `/admin`.
+- **Identity visible.** Groups account card shows avatar + display name + email + group; own
+  Ranks card pinned; YOU badge follows the link.
+- **Real Google OAuth.** `auth.js` redirects to `${SUPABASE_URL}/auth/v1/authorize?provider=
+  google&redirect_to=<app>` in supabase mode and captures the returned `#access_token`; falls
+  back to the local mock when keys are absent. README has the Google Cloud + Supabase setup steps.
+- Files: `app.py` (/api/me group_name, /api/claim-name, private-name hidden in page), `app.js`
+  (authGate read-only/private split, chooseName, header fill, account avatar), `auth.js` (OAuth),
+  `templates/base.html` (conditional header), `static/style.css`. Tests: `test_onboarding.py` (7).
 
 ## V2 progress (task-by-task, newest first)
 - **Task 6 + 8 — Full V2 UI + QA (done).** Rebuilt all tabs + player page to the rally-v9 spec

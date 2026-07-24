@@ -1,10 +1,11 @@
 "use strict";
-/* Rally client auth (Task 4). Token in localStorage; sends Bearer on writes. Sign-in screen
-   is inline (no popups): "Continue with Google" / "Continue with email" (6-digit OTP).
-   Mock mode works with zero keys; email OTP also works against real Supabase. */
+/* Rally client auth. Token in localStorage; Bearer sent on writes. Sign-in screen is inline
+   (no popups): "Continue with Google" / "Continue with email" (6-digit OTP).
+   - Real Supabase mode (SUPABASE_URL + SUPABASE_ANON_KEY set): Google uses the real Supabase
+     OAuth redirect (opens the Google account chooser); the server verifies the returned token.
+   - No keys: falls back silently to a local mock so the app keeps working. */
 window.Auth = (function () {
   var TOK = "rally_token", EM = "rally_email";
-  var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]); }); };
 
   function token() { return localStorage.getItem(TOK) || ""; }
   function email() { return localStorage.getItem(EM) || ""; }
@@ -13,17 +14,53 @@ window.Auth = (function () {
   function set(t, e) { localStorage.setItem(TOK, t); if (e) localStorage.setItem(EM, e); }
   function signOut() { localStorage.removeItem(TOK); localStorage.removeItem(EM); }
 
+  // On return from a Supabase OAuth redirect the token arrives in the URL hash. Capture it.
+  (function captureOAuthReturn() {
+    var h = window.location.hash || "";
+    if (h.indexOf("access_token=") >= 0) {
+      var p = new URLSearchParams(h.slice(1));
+      var t = p.get("access_token");
+      if (t) {
+        localStorage.setItem(TOK, t);
+        try { history.replaceState(null, "", window.location.pathname + window.location.search); } catch (e) { }
+        refreshEmail();   // best-effort: fill the display email from the verified token
+      }
+    }
+  })();
+
+  var _cfg = null;
+  async function config() {
+    if (_cfg) return _cfg;
+    try { _cfg = await (await fetch("/api/auth/config")).json(); } catch (e) { _cfg = { mode: "mock" }; }
+    return _cfg;
+  }
+  async function refreshEmail() {
+    try {
+      var j = await (await fetch("/api/auth/me", { headers: headers() })).json();
+      if (j && j.email) localStorage.setItem(EM, j.email);
+      return j && j.email;
+    } catch (e) { return null; }
+  }
+
   async function _post(url, body) {
     var r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
     var j = await r.json().catch(function () { return {}; });
     if (!r.ok) throw (j.error || ("error " + r.status));
     return j;
   }
-  async function google(em) { var r = await _post("/api/auth/google", { email: em }); set(r.token, r.email); return r; }
+  // Google: real Supabase OAuth redirect when configured, else local mock.
+  async function google(em) {
+    var cfg = await config();
+    if (cfg.mode === "supabase" && cfg.supabase_url) {
+      var redirect = window.location.origin + window.location.pathname;
+      window.location.href = cfg.supabase_url + "/auth/v1/authorize?provider=google&redirect_to=" + encodeURIComponent(redirect);
+      return new Promise(function () { });    // navigating away
+    }
+    var r = await _post("/api/auth/google", { email: em }); set(r.token, r.email); return r;
+  }
   async function emailStart(em) { return _post("/api/auth/email/start", { email: em }); }
   async function emailVerify(em, code) { var r = await _post("/api/auth/email/verify", { email: em, code: code }); set(r.token, r.email); return r; }
 
-  // Inline sign-in screen. Calls onDone() when signed in.
   function renderSignIn(host, onDone) {
     host.innerHTML =
       '<div class="card" style="margin-top:24px">' +
@@ -68,8 +105,8 @@ window.Auth = (function () {
   }
 
   return {
-    token: token, email: email, signedIn: signedIn, headers: headers,
-    signOut: signOut, google: google, emailStart: emailStart, emailVerify: emailVerify,
-    renderSignIn: renderSignIn
+    token: token, email: email, signedIn: signedIn, headers: headers, signOut: signOut,
+    google: google, emailStart: emailStart, emailVerify: emailVerify,
+    config: config, refreshEmail: refreshEmail, renderSignIn: renderSignIn
   };
 })();

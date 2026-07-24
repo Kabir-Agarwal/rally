@@ -46,7 +46,31 @@ OTP). No phone/SMS. Set two env vars (never commit them; keep them in untracked 
 **If these are absent, Rally runs a built-in local mock provider** so the whole flow works
 offline: email OTP returns the code in the response (dev only), and "Continue with Google"
 signs in as a deterministic test user. Writes (scoring, starting matches, group actions)
-require sign-in; viewing public groups requires nothing. Players are added by the admin only.
+require sign-in; viewing public groups requires nothing. **Onboarding is self-serve:** you
+sign in first, then choose the name your friends will see (which creates your player); you
+can instead claim a player an admin pre-created. Admins manage players in `/admin`.
+
+### Turning on real Google sign-in (one-time setup)
+
+Google sign-in works through Supabase — you don't paste any Google secret into Rally. Do this:
+
+1. **Google Cloud Console** → APIs & Services → **Credentials** → *Create credentials* →
+   *OAuth client ID* → Application type **Web application**.
+2. Under **Authorized redirect URIs**, add exactly:
+   `https://<your-project-ref>.supabase.co/auth/v1/callback`
+   (find `<your-project-ref>` in your Supabase project URL). Save; copy the generated
+   **Client ID** and **Client secret**.
+3. **Supabase dashboard** → your project → **Authentication → Providers → Google** → toggle
+   it **on**, paste the **Client ID** and **Client secret** from step 2, and Save.
+4. **Supabase dashboard** → **Authentication → URL Configuration**:
+   - **Site URL**: your app's address, e.g. `https://rally-scorer.vercel.app`
+   - **Redirect URLs**: add the same address (and `http://localhost:7860` if you test locally).
+5. In Rally's environment (`.env` locally, or the host's env vars), set:
+   - `SUPABASE_URL = https://<your-project-ref>.supabase.co`
+   - `SUPABASE_ANON_KEY = <the project's anon/public key>` (Supabase → Project Settings → API).
+6. Deploy/restart. "Continue with Google" now opens the real Google account chooser; the
+   server verifies each returned session. Leave `SUPABASE_URL`/`SUPABASE_ANON_KEY` unset to
+   keep the local mock. (Email OTP needs only steps 4–5; Google needs all of them.)
 
 ## Deploy
 

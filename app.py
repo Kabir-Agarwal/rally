@@ -649,7 +649,8 @@ async def api_delete(code: str, mid: int, request: Request):
 # --- identity <-> player linking (per group) ------------------------------
 @app.get("/g/{code}/api/me")
 def api_group_me(code: str, request: Request):
-    """Who am I in this group? {signed_in, email, player_id, player_name}."""
+    """Who am I in this group? Group name is only revealed to signed-in users of a private
+    group (public groups render their name in the page shell already)."""
     con = get_con()
     g = require_group(con, code)
     u = current_user(request)
@@ -662,12 +663,13 @@ def api_group_me(code: str, request: Request):
         row = con.execute("SELECT name FROM players WHERE id=?", (pid,)).fetchone()
         name = row["name"] if row else None
     con.close()
-    return {"signed_in": True, "email": u.get("email"), "player_id": pid, "player_name": name}
+    return {"signed_in": True, "email": u.get("email"), "player_id": pid,
+            "player_name": name, "group_name": g["name"]}
 
 
 @app.post("/g/{code}/api/link")
 async def api_group_link(code: str, request: Request):
-    """First-time 'Which player are you?' pick — locked once set."""
+    """Claim an EXISTING player (secondary path). Locked once set."""
     d = await _body(request)
     con = get_con()
     u = require_user(request, con)
@@ -684,6 +686,31 @@ async def api_group_link(code: str, request: Request):
         return JSONResponse({"error": str(e)}, 409)   # already linked (locked)
     con.close()
     return {"player_id": p["id"]}
+
+
+@app.post("/g/{code}/api/claim-name")
+async def api_claim_name(code: str, request: Request):
+    """Self-serve: choose the name your friends will see. Creates a NEW player with that
+    name and permanently links it to this account. The group code is the only gate."""
+    d = await _body(request)
+    con = get_con()
+    u = require_user(request, con)
+    g = require_group(con, code)
+    if db.get_link(con, g["id"], u["sub"]) is not None:
+        con.close()
+        return JSONResponse({"error": "you already have a name in this group"}, 409)
+    name = (d.get("name") or "").strip()
+    if not name:
+        con.close()
+        return JSONResponse({"error": "please enter a name"}, 400)
+    try:
+        pid = db.add_player(con, g["id"], name)     # rejects duplicate (ci) names
+    except ValueError:
+        con.close()
+        return JSONResponse({"error": "that name is taken in this group — try another"}, 409)
+    db.set_link(con, g["id"], u["sub"], pid)
+    con.close()
+    return {"player_id": pid, "name": name}
 
 
 # --- player page payload --------------------------------------------------

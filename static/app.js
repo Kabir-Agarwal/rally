@@ -39,45 +39,95 @@ function enqueue(url, body) { return queue ? queue.push({ url, body }) : api(url
 let ME = { signed_in: false, player_id: null, player_name: null, email: null };
 
 // ---------- auth gate + identity ----------
-async function authGate() {
-  // Every tab needs a signed-in identity to act. Public reads still work, but the app is
-  // gated to sign-in first (the reference UI signs in before the group tabs).
-  if (window.Auth && Auth.signedIn()) return true;
+function showSignInGate() {
   const tc = document.getElementById("tabContent");
   if (tc) tc.style.display = "none";
+  document.querySelectorAll("#roBanner,#signinGate").forEach(n => n.remove());
   const gate = el(`<div id="signinGate"></div>`);
   document.querySelector(".app").appendChild(gate);
   Auth.renderSignIn(gate, () => location.reload());
+}
+function setHeaderName(name) { const el2 = document.getElementById("hdName"); if (el2 && name) el2.textContent = name; }
+
+async function authGate() {
+  // Signed in -> full access. Signed out: a PUBLIC group is viewable read-only; a private
+  // group shows the sign-in screen first and never reveals its name (Task A).
+  if (window.Auth && Auth.signedIn()) {
+    window.READONLY = false;
+    try { const me = await api(`/g/${GROUP.code}/api/me`); if (me.group_name) setHeaderName(me.group_name); } catch (e) { }
+    return true;
+  }
+  if (GROUP.is_public) {
+    window.READONLY = true;                 // public: read-only viewing, no writes/identity
+    const banner = el(`<div id="roBanner" class="robanner">Viewing read-only ·
+      <a href="#" onclick="showSignInGate();return false">Sign in to play</a></div>`);
+    const tc = document.getElementById("tabContent");
+    tc.parentNode.insertBefore(banner, tc);
+    return true;
+  }
+  showSignInGate();                          // private + signed out
   return false;
 }
 
 async function ensureIdentity() {
   ME = await api(`/g/${GROUP.code}/api/me`);
-  if (ME.signed_in && !ME.player_id) return await pickWhoAmI();
+  if (ME.group_name) setHeaderName(ME.group_name);
+  if (ME.signed_in && !ME.player_id) return await chooseName();
   return true;
 }
-async function pickWhoAmI() {
-  const meta = await api(`/g/${GROUP.code}/api/meta`);
+
+// Self-serve "Choose your name" screen (Task B). Default = create a new name; a small
+// secondary link lets someone claim a player an admin pre-created.
+async function chooseName() {
   return new Promise((resolve) => {
-    const ov = el(`<div class="modal" id="whoModal"><div class="sheet3">
-      <div style="font-weight:800;font-size:17px">Which player are you?</div>
-      <div class="muted" style="margin:2px 0 10px">Pick once — this locks to your account. Players are added by the admin.</div>
-      <div class="chips" id="whoChips"></div>
-      <div class="err" id="whoErr"></div></div></div>`);
-    document.body.appendChild(ov);
-    const chips = ov.querySelector("#whoChips");
-    if (!meta.players.length) chips.innerHTML = '<span class="muted">No players yet — ask the admin to add players.</span>';
-    meta.players.forEach(p => {
-      const chip = el(`<div class="chip">${esc(p.name)}</div>`);
-      chip.onclick = async () => {
-        try {
-          await api(`/g/${GROUP.code}/api/link`, { player_id: p.id });
-          ME = await api(`/g/${GROUP.code}/api/me`);
-          ov.remove(); resolve(true);
-        } catch (e) { ov.querySelector("#whoErr").textContent = e; }
-      };
-      chips.appendChild(chip);
-    });
+    const tc = document.getElementById("tabContent");
+    if (tc) tc.style.display = "none";
+    const ov = el(`<div id="nameGate">
+      <div class="card" style="margin-top:24px">
+        <div style="font-weight:800;font-size:18px;text-align:center">Choose your name</div>
+        <div class="muted" style="text-align:center;margin:4px 0 12px">The name your friends will see</div>
+        <input id="nmField" placeholder="e.g. Sam" autocomplete="off" maxlength="24">
+        <button class="btn" style="margin-top:10px" id="nmGo">Continue</button>
+        <div class="err" id="nmErr"></div>
+        <div class="muted" style="text-align:center;margin-top:10px">Only an admin can change this later.</div>
+        <div style="text-align:center;margin-top:12px;font-size:13px"><a href="#" id="nmClaim">I'm already in this group</a></div>
+      </div>
+      <div id="claimBox"></div></div>`);
+    document.querySelector(".app").appendChild(ov);
+    const err = ov.querySelector("#nmErr");
+    ov.querySelector("#nmGo").onclick = async () => {
+      err.textContent = "";
+      const name = ov.querySelector("#nmField").value.trim();
+      if (!name) { err.textContent = "please enter a name"; return; }
+      try {
+        await api(`/g/${GROUP.code}/api/claim-name`, { name });
+        ME = await api(`/g/${GROUP.code}/api/me`);
+        ov.remove(); if (tc) tc.style.display = ""; resolve(true);
+      } catch (e) { err.textContent = e; }        // duplicate/empty -> message + retry
+    };
+    ov.querySelector("#nmField").addEventListener("keydown", e => { if (e.key === "Enter") ov.querySelector("#nmGo").click(); });
+    ov.querySelector("#nmClaim").onclick = async (e) => {
+      e.preventDefault();
+      const box = ov.querySelector("#claimBox");
+      const meta = await api(`/g/${GROUP.code}/api/meta`);
+      const others = meta.players;
+      box.innerHTML = `<div class="card"><div style="font-weight:800">Claim your existing player</div>
+        <div class="muted" style="margin:2px 0 8px">Pick the name an admin already created for you.</div>
+        <div class="chips" id="claimChips"></div><div class="err" id="claimErr"></div></div>`;
+      const chips = box.querySelector("#claimChips");
+      if (!others.length) chips.innerHTML = '<span class="muted">No players yet — just create your name above.</span>';
+      others.forEach(p => {
+        const chip = el(`<div class="chip">${esc(p.name)}</div>`);
+        chip.onclick = async () => {
+          try {
+            await api(`/g/${GROUP.code}/api/link`, { player_id: p.id });
+            ME = await api(`/g/${GROUP.code}/api/me`);
+            ov.remove(); if (tc) tc.style.display = ""; resolve(true);
+          } catch (e2) { box.querySelector("#claimErr").textContent = e2; }
+        };
+        chips.appendChild(chip);
+      });
+    };
   });
 }
 
@@ -203,9 +253,13 @@ function initRanks() { loadRanks(); poll(async () => { await loadRanks(); }, 500
 // ================= GROUPS =================
 async function initGroups() {
   const acc = document.getElementById("accountCard");
-  acc.innerHTML = `<div class="row"><div style="flex:1"><div style="font-weight:800">${esc(ME.email || "Signed in")}</div>
-    <div class="muted">You are <b>${esc(ME.player_name || "— pick in a moment")}</b> in ${esc(GROUP.name)}</div></div>
-    <button class="btn sm ghost" onclick="Auth.signOut();location.reload()">Sign out</button></div>`;
+  const dn = ME.player_name || "—";
+  const gname = ME.group_name || GROUP.name || "this group";
+  acc.innerHTML = `<div class="row">
+    <span class="avatar" style="width:40px;height:40px;font-size:17px">${esc((dn[0] || "?").toUpperCase())}</span>
+    <div style="flex:1"><div style="font-weight:800;font-size:16px">${esc(dn)}</div>
+      <div class="muted">${esc(ME.email || "")} · in ${esc(gname)}</div></div>
+    <button class="btn sm ghost" style="width:auto" onclick="Auth.signOut();location.reload()">Sign out</button></div>`;
   renderGroupRows();
 }
 function renderGroupRows() {
@@ -325,8 +379,15 @@ document.addEventListener("DOMContentLoaded", async () => {
   const page = window.PAGE;
   if (page === "landing") { return initLanding(); }
   if (!GROUP) return;
-  if (!(await authGate())) return;         // shows sign-in, reloads on success
-  try { await ensureIdentity(); } catch (e) { }
+  if (!(await authGate())) return;         // shows sign-in (private) or read-only (public)
+  if (!window.READONLY) { try { await ensureIdentity(); } catch (e) { } }
+  if (window.READONLY && page === "log") {
+    document.getElementById("logRoot").innerHTML =
+      `<div class="card" style="text-align:center"><div style="font-weight:800">Sign in to score</div>
+       <div class="muted" style="margin:6px 0 10px">Scoring, starting matches and joining are for signed-in players.</div>
+       <button class="btn" onclick="showSignInGate()">Sign in</button></div>`;
+    return;
+  }
   if (page === "live") initLive();
   else if (page === "leaderboard") initRanks();
   else if (page === "log") initLog();
@@ -336,9 +397,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 });
 
 // ---------- landing ----------
-function initLanding() {
+async function initLanding() {
   const host = document.getElementById("landingContent");
   if (window.Auth && !Auth.signedIn()) { Auth.renderSignIn(host, () => location.reload()); return; }
+  if (window.Auth && !Auth.email()) { try { await Auth.refreshEmail(); } catch (e) { } }  // after Google OAuth
   host.innerHTML = `
     <div id="myGroups"></div>
     <div class="card"><div style="font-weight:800;margin-bottom:8px">Join a group</div>

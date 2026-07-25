@@ -8,16 +8,23 @@ const path = require("path");
 
 function makeSandbox() {
   const store = {};
-  const authState = { signedOut: false };
+  const authState = { signedOut: false, refreshResult: false, recorded: null, lastReturn: null };
   const auth = {
     _token: null,
     signedIn() { return !!store.rally_token; },
-    signOut() { delete store.rally_token; authState.signedOut = true; },
+    signOut() { delete store.rally_token; delete store.rally_refresh; authState.signedOut = true; },
     headers() { return store.rally_token ? { Authorization: "Bearer " + store.rally_token } : {}; },
     email() { return store.rally_email || ""; },
     refreshEmail() { return Promise.resolve(null); },
     renderSignIn(host, cb) { host.__signIn = true; },
     config() { return Promise.resolve({ mode: "mock" }); },
+    refreshToken() { return store.rally_refresh || ""; },
+    async refreshSession() {                       // configurable per test via authState.refreshResult
+      if (authState.refreshResult) { store.rally_token = "renewed-token"; return true; }
+      delete store.rally_token; delete store.rally_refresh; authState.signedOut = true; return false;
+    },
+    lastReturn() { return authState.lastReturn; },
+    recordReturn(o) { authState.recorded = o; authState.lastReturn = o; },
   };
   const host = { __signIn: false, innerHTML: "" };
   const doc = {
@@ -89,6 +96,51 @@ const code = fs.readFileSync(path.join(__dirname, "static", "app.js"), "utf8");
   sb = makeSandbox(); sb.window.PAGE = "landing"; vm.createContext(sb); vm.runInContext(code, sb);
   sb.failOpen();
   assert.strictEqual(sb._host.__signIn, true, "failOpen -> sign-in view rendered");
+
+  // 6) Task 4: failOpen writes an error card (not blank) when auth.js is missing
+  sb = makeSandbox(); sb.window.PAGE = "landing"; sb.window.Auth = undefined; sb.Auth = undefined;
+  vm.createContext(sb); vm.runInContext(code, sb);
+  sb.failOpen();
+  assert.ok(/Rally couldn't start/.test(sb._host.innerHTML), "no-auth -> 'Rally couldn't start' card");
+  assert.ok(/Reload/.test(sb._host.innerHTML), "error card has a reload button");
+
+  // 7) Task 3: rejected token WITH a refresh token that SUCCEEDS -> session kept (not signed out)
+  sb = makeSandbox(); sb._store.rally_token = "expired"; sb._store.rally_refresh = "rt";
+  sb._authState.refreshResult = true;
+  sb.fetch = () => Promise.resolve({ ok: true, json: () => Promise.resolve({ signed_in: false }) });
+  vm.createContext(sb); vm.runInContext(code, sb);
+  // first /me says false; refreshSession succeeds; but our stub /me always says false, so re-check
+  // still false -> to prove "kept on success" we make /me flip to true after refresh:
+  let calls = 0;
+  sb.fetch = () => { calls++; return Promise.resolve({ ok: true, json: () => Promise.resolve({ signed_in: calls > 1 }) }); };
+  await sb.staleTokenGuard();
+  assert.strictEqual(sb._authState.signedOut, false, "refresh succeeded -> session kept");
+
+  // 8) Task 3: rejected token WITH a refresh token that FAILS -> clean sign-out, no hang
+  sb = makeSandbox(); sb._store.rally_token = "expired"; sb._store.rally_refresh = "rt";
+  sb._authState.refreshResult = false;
+  sb.fetch = () => Promise.resolve({ ok: true, json: () => Promise.resolve({ signed_in: false }) });
+  vm.createContext(sb); vm.runInContext(code, sb);
+  const t1 = Date.now();
+  await sb.staleTokenGuard();
+  assert.ok(Date.now() - t1 < 6000, "refresh-fail path did not hang");
+  assert.strictEqual(sb._authState.signedOut, true, "refresh failed -> clean sign-out");
+
+  // 9) Task 3: NO refresh token -> behaves exactly as today (sign out on signed_in:false)
+  sb = makeSandbox(); sb._store.rally_token = "expired";      // no rally_refresh
+  sb.fetch = () => Promise.resolve({ ok: true, json: () => Promise.resolve({ signed_in: false }) });
+  vm.createContext(sb); vm.runInContext(code, sb);
+  await sb.staleTokenGuard();
+  assert.strictEqual(sb._authState.signedOut, true, "no refresh token -> plain sign-out (as today)");
+
+  // 10) Task 2: fresh OAuth token rejected by server -> a reason is recorded
+  sb = makeSandbox(); sb._store.rally_token = "fresh"; sb._authState.lastReturn = { ok: true };
+  sb.fetch = () => Promise.resolve({ ok: true, json: () => Promise.resolve({ signed_in: false }) });
+  vm.createContext(sb); vm.runInContext(code, sb);
+  await sb.staleTokenGuard();
+  assert.ok(sb._authState.recorded && /server rejected/i.test(sb._authState.recorded.message),
+    "fresh-token rejection surfaces a message");
+  assert.strictEqual(sb._authState.signedOut, true);
 
   console.log("OK boot (node)");
 })().catch(e => { console.error(e); process.exit(1); });

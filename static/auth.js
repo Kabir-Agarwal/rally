@@ -75,9 +75,28 @@ window.Auth = (function () {
   async function refreshEmail() {
     try {
       var j = await (await fetch("/api/auth/me", { headers: headers() })).json();
-      if (j && j.email) localStorage.setItem(EM, j.email);
+      if (j && j.email) safeSet(localStorage, EM, j.email);
       return j && j.email;
     } catch (e) { return null; }
+  }
+  // Renew an expired session with the stored refresh token (Supabase access tokens last ~1h).
+  // Success -> store the new tokens and return true. Failure/no-token -> clear tokens, return false.
+  async function refreshSession() {
+    var rt = refreshToken();
+    if (!rt) return false;
+    var cfg = await config();
+    if (!cfg || cfg.mode !== "supabase" || !cfg.supabase_url) return false;
+    try {
+      var r = await fetch(cfg.supabase_url + "/auth/v1/token?grant_type=refresh_token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "apikey": cfg.anon_key || "" },
+        body: JSON.stringify({ refresh_token: rt }),
+      });
+      if (!r.ok) { signOut(); return false; }
+      var j = await r.json();
+      if (j && j.access_token) { set(j.access_token, "", j.refresh_token || rt); return true; }
+      signOut(); return false;
+    } catch (e) { signOut(); return false; }
   }
 
   async function _post(url, body) {
@@ -177,7 +196,9 @@ window.Auth = (function () {
 
   return {
     token: token, email: email, signedIn: signedIn, headers: headers, signOut: signOut,
+    refreshToken: refreshToken, refreshSession: refreshSession,
     google: google, guest: guest, emailStart: emailStart, emailVerify: emailVerify,
-    config: config, refreshEmail: refreshEmail, renderSignIn: renderSignIn
+    config: config, refreshEmail: refreshEmail, renderSignIn: renderSignIn,
+    lastReturn: lastReturn, recordReturn: recordReturn, clearLastReturn: clearLastReturn
   };
 })();

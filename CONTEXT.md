@@ -137,7 +137,43 @@ SQLite file `tennis.db` is created on first run (gitignored).
   fresh context shows the sign-in screen (Google/email — prod has Supabase keys); a junk token is
   cleared by the guard and the sign-in still renders. No console errors.
 
-## Sign-in outcomes surfaced + refresh-token sessions (latest — NOT deployed)
+## UI rebuild to approved mockup v9 (latest)
+Rebuilt the drifted SCREENS to match `docs/mockup-v9.jsx` (the palette already matched; the
+layouts did not). Full drift audit in `docs/drift-inventory.md`. Suite: 81 Python + boot/engine/
+sync Node green.
+- **Landing / Groups (Task 2).** Groups tab `/g/<code>/groups` now renders the mockup: a **YOU
+  card** (avatar, game name + gold YOU badge, real-name subtext, "claimed on this phone",
+  "Change"); **YOUR GROUPS** as one card per group (🎾 name + green "· current", "code XXXX ·
+  private/public", Make public/private toggle); a final card with tap-to-expand "+ Create a
+  group" / "+ Join another group". The group-agnostic **landing `/`** got the same card system
+  (its YOU card shows email + Sign out — no per-group player exists there). All prior behaviour
+  kept (join/create/switch/visibility/sign-out); no group content before sign-in.
+- **Name editor (Task 4).** The YOU-card "Change" opens the existing self-serve editor (game
+  name bold + real name subtext, uniqueness check + error preserved) — `renderYouCard` →
+  `editName`/`saveName` → `/api/rename-me`. Email + sign-out live inside that editor.
+- **Live (Task 3).** Win-prob is now one segmented track + a caption ("updates live with every
+  point, from ratings + current score" / "…games won"); 3-way TT bar is a single green/gold/line
+  bar. `winBar` in app.js; `.wpwrap/.wplabels/.wptrack/.wpseg/.wpcap` in style.css.
+- **Log (Task 3).** Chemistry rows are the mockup's boxed team-coloured rows ("TEAM n ·
+  Chemistry · score / Unexplored — N more… / pick both players"); both team rows always show for
+  doubles. `renderChem` in log.js; `.chembox/.chemteam/.chemlab`.
+- **Player (Task 3).** Back button reads "← Ranks" (was "← Back").
+- **Ranks / History / filter sheets:** already matched structurally — unchanged (Ranks keeps its
+  pinned clay YOU card, an intentional enhancement not in the mockup).
+- **Triple Threat direct scoring (Task 5).** The live TT editor gains a **"+ player" button per
+  rotation player** that awards a game immediately — no rotation confirmation needed. The Yes/No
+  rotation confirm still exists but no longer BLOCKS scoring. Serve degrades cleanly: an award
+  made while the rotation is confirmed (e.g. game 1 from placement) sends server/receiver; an
+  award made while the rotation is **unconfirmed sends `{winner}` only** → `tt_games.
+  server_player_id` NULL, no serve attribution (never guesses). A "Set who's serving" link
+  re-confirms. `ttAward`/`commitTTGame`/`EDIT.rotKnown` in log.js. **No schema change** —
+  `tt_games.server_player_id`/`receiver_player_id` were already nullable and `/tt` already passed
+  `d.get("server")`. Test: `test_tt_direct_award_without_confirmed_rotation` in test_tennis.py.
+- **Permanent rule reaffirmed:** the two surfaces (landing `/` vs Groups tab) map to the
+  mockup's single GroupsTab; the YOU-card name editor only exists in-group (identity is
+  per-group via player_links).
+
+## Sign-in outcomes surfaced + refresh-token sessions (NOT deployed at time of writing)
 - **Permanent rule: no sign-in outcome is ever swallowed.** Every failure path puts a reason on
   screen; the sign-in card never silently reappears.
 - **OAuth return recorded (auth.js `captureOAuthReturn`).** On return from Supabase it inspects

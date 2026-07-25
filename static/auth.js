@@ -31,7 +31,12 @@ window.Auth = (function () {
   var _cfg = null;
   async function config() {
     if (_cfg) return _cfg;
-    try { _cfg = await (await fetch("/api/auth/config")).json(); } catch (e) { _cfg = { mode: "mock" }; }
+    // bounded so the sign-in screen never hangs on "…" if /api/auth/config stalls
+    var timeout = new Promise(function (res) { setTimeout(function () { res({ mode: "mock" }); }, 4000); });
+    try {
+      _cfg = await Promise.race([fetch("/api/auth/config").then(function (r) { return r.json(); }), timeout]);
+    } catch (e) { _cfg = { mode: "mock" }; }
+    if (!_cfg || !_cfg.mode) _cfg = { mode: "mock" };
     return _cfg;
   }
   async function refreshEmail() {

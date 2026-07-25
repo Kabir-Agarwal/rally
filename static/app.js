@@ -26,6 +26,15 @@ async function api(url, body, method) {
   return j;
 }
 
+// Fail-open helper: resolve to `fallback` if `p` takes longer than `ms` or rejects, so a
+// stalled network call can NEVER block the boot on the "Loading…" placeholder.
+function raceTimeout(p, ms, fallback) {
+  return Promise.race([
+    Promise.resolve(p).catch(() => fallback),
+    new Promise(res => setTimeout(() => res(fallback), ms || 4000)),
+  ]);
+}
+
 // joined-groups memory (device-local); identity is server-side (player_links)
 const LS = {
   groups() { try { return JSON.parse(localStorage.getItem("rally_groups") || "[]"); } catch (e) { return []; } },
@@ -62,7 +71,8 @@ async function authGate() {
   // group shows the sign-in screen first and never reveals its name (Task A).
   if (window.Auth && Auth.signedIn()) {
     window.READONLY = false;
-    try { const me = await api(`/g/${GROUP.code}/api/me`); if (me.group_name) setHeaderName(me.group_name); } catch (e) { }
+    const me = await raceTimeout(api(`/g/${GROUP.code}/api/me`), 4000, null);
+    if (me && me.group_name) setHeaderName(me.group_name);
     return true;
   }
   if (GROUP.is_public) {
@@ -78,7 +88,7 @@ async function authGate() {
 }
 
 async function ensureIdentity() {
-  ME = await api(`/g/${GROUP.code}/api/me`);
+  ME = await raceTimeout(api(`/g/${GROUP.code}/api/me`), 4000, { signed_in: false, player_id: null });
   if (ME.group_name) setHeaderName(ME.group_name);
   if (ME.signed_in && !ME.player_id) return await chooseName();
   return true;
@@ -539,7 +549,13 @@ const TAB_SKELETONS = {
       <button class="funnelbtn" onclick="openFunnel('hist')">▼</button></div>
     <div id="historyList"><div class="empty">Loading…</div></div>`,
 };
-const TAB_INIT = { live: initLive, leaderboard: initRanks, log: initLog, groups: initGroups, history: initHistory };
+// Lazy wrappers: initLog lives in log.js, which is NOT loaded on the landing page. Referencing
+// it directly here would throw at load and crash the whole boot. Arrows defer the lookup to
+// call time (only ever on a group page, where log.js is present).
+const TAB_INIT = {
+  live: (r) => initLive(r), leaderboard: (r) => initRanks(r), log: (r) => initLog(r),
+  groups: (r) => initGroups(r), history: (r) => initHistory(r),
+};
 const TAB_URL = { live: "live", leaderboard: "leaderboard", log: "log", groups: "groups", history: "history" };
 const PANELS = {};
 let CURRENT_TAB = null;
@@ -596,23 +612,61 @@ window.addEventListener("popstate", () => {
   routeFromPath();
 });
 
-// ---------- boot ----------
-document.addEventListener("DOMContentLoaded", async () => {
-  if (window.PAGE === "landing") { return initLanding(); }
+// ---------- boot (fail-open: never stuck on "Loading…") ----------
+// If a token exists, ask the server if the session is real. A definitive "no" (signed_in:false)
+// clears the stale token. A timeout/error does NOT nuke a possibly-valid token — the boot just
+// fails open to the sign-in view. Bounded by raceTimeout so it can't hang.
+async function staleTokenGuard() {
+  if (!(window.Auth && Auth.signedIn())) return;
+  const me = await raceTimeout(
+    fetch("/api/auth/me", { headers: Auth.headers() }).then(r => (r.ok ? r.json() : null)).catch(() => null),
+    4000, null);
+  if (me && me.signed_in === false) Auth.signOut();   // server rejected the token -> clear it
+}
+function failOpen() {
+  if (window.PAGE === "landing") {
+    const host = document.getElementById("landingContent");
+    if (host && window.Auth) { try { Auth.renderSignIn(host, () => location.reload()); } catch (e) { host.innerHTML = ""; } }
+  } else {
+    try { showSignInGate(); } catch (e) { }
+  }
+}
+async function boot() {
+  await staleTokenGuard();
+  if (window.PAGE === "landing") return initLanding();
   if (!GROUP) return;
   if (!(await authGate())) return;         // shows sign-in (private) or read-only (public)
-  if (!window.READONLY) { try { await ensureIdentity(); } catch (e) { } }
+  if (!window.READONLY) { await raceTimeout(ensureIdentity(), 4000, true); }
   const initTab = (window.INIT && TAB_URL[window.INIT.tab]) ? window.INIT.tab : "live";
   renderTab(initTab);
   setActiveNav(initTab);
   if (window.INIT && window.INIT.player) openPlayerNoPush(window.INIT.player);
-});
+}
+let _booted = false;
+function startBoot() {
+  if (_booted) return;                    // run exactly once, whichever trigger fires first
+  _booted = true;
+  // Hard backstop: whatever happens, the placeholder is gone within ~4.5s.
+  const backstop = setTimeout(failOpen, 4500);
+  boot().then(() => clearTimeout(backstop)).catch(() => { clearTimeout(backstop); failOpen(); });
+}
+// Belt-and-suspenders: this script may run before OR after DOMContentLoaded, and in some
+// embedded browsers the event doesn't reach a late-added listener. Trigger from every angle;
+// the once-guard makes sure boot runs a single time.
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", startBoot);
+window.addEventListener("load", startBoot);
+setTimeout(startBoot, 0);
 
 // ---------- landing ----------
-async function initLanding() {
+function initLanding() {
   const host = document.getElementById("landingContent");
-  if (window.Auth && !Auth.signedIn()) { Auth.renderSignIn(host, () => location.reload()); return; }
-  if (window.Auth && !Auth.email()) { try { await Auth.refreshEmail(); } catch (e) { } }  // after Google OAuth
+  if (!(window.Auth && Auth.signedIn())) { Auth.renderSignIn(host, () => location.reload()); return; }
+  renderLanding(host);                                  // render immediately — never block on a fetch
+  if (!Auth.email()) {                                  // fill email in the background (after Google OAuth)
+    raceTimeout(Auth.refreshEmail(), 4000, null).then(() => { if (Auth.email()) renderLanding(host); });
+  }
+}
+function renderLanding(host) {
   host.innerHTML = `
     <div id="myGroups"></div>
     <div class="card"><div style="font-weight:800;margin-bottom:8px">Join a group</div>

@@ -29,7 +29,33 @@ def validate_sets(sets):
 
 
 # --- start (players + order locked here) ----------------------------------
-def start_match(con, group_id, kind, side1, side2, rotation, logger_player_id, played_on=None):
+def _live_match_of(con, group_id, pid):
+    row = con.execute(
+        "SELECT m.id FROM matches m JOIN match_players mp ON mp.match_id=m.id "
+        "WHERE m.group_id=? AND m.status='live' AND m.deleted=0 AND mp.player_id=? LIMIT 1",
+        (group_id, pid)).fetchone()
+    return row["id"] if row else None
+
+
+def _pname(con, pid):
+    r = con.execute("SELECT name FROM players WHERE id=?", (pid,)).fetchone()
+    return r["name"] if r else "?"
+
+
+def _match_label(con, mid):
+    s1, s2, rot = db.sides(con, mid)
+    if rot:
+        return " · ".join(_pname(con, p) for p in rot)
+    return " & ".join(_pname(con, p) for p in s1) + " vs " + " & ".join(_pname(con, p) for p in s2)
+
+
+def start_match(con, group_id, kind, side1, side2, rotation, logger_player_id, played_on=None, enforce_live=True):
+    ids = list(rotation) if kind == "tt" else list(side1) + list(side2)
+    if enforce_live:                      # one live match per player (Task 6, server-enforced)
+        for pid in ids:
+            lm = _live_match_of(con, group_id, pid)
+            if lm:
+                raise ValueError(f"{_pname(con, pid)} is already in a live match ({_match_label(con, lm)}) — finish it first.")
     ts = now()
     cur = con.execute(
         "INSERT INTO matches(group_id, played_on, kind, status, logger_player_id, created_at, started_at)"
@@ -53,8 +79,8 @@ def start_match(con, group_id, kind, side1, side2, rotation, logger_player_id, p
 
 
 def save_played(con, group_id, kind, side1, side2, rotation, sets, logger_player_id, played_on=None):
-    """'Already played? Final score' — create match and send straight to approval."""
-    mid = start_match(con, group_id, kind, side1, side2, rotation, logger_player_id, played_on)
+    """'Already played? Final score' — a PAST result never conflicts with a current live match."""
+    mid = start_match(con, group_id, kind, side1, side2, rotation, logger_player_id, played_on, enforce_live=False)
     if kind != "tt":
         _write_sets(con, mid, sets)
     finish_match(con, mid)

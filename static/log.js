@@ -67,7 +67,8 @@ function renderCourt() {
     const sel = placed.includes(p.id);
     const live = p.live ? '<span class="dot pulse"></span>' : '';
     const real = p.real_name ? `<span class="chip-real">${esc(p.real_name)}</span>` : '';
-    return `<div class="chip ${sel ? 'sel' : ''} ${p.live ? 'busy' : ''}" onclick="rosterTap(${p.id})">${live}${esc(p.name)}${real}</div>`;
+    const busyNote = (p.live && !sel) ? '<span class="chip-real">· in a live match</span>' : '';
+    return `<div class="chip ${sel ? 'sel' : ''} ${p.live && !sel ? 'busy' : ''}" onclick="rosterTap(${p.id})">${live}${esc(p.name)}${real}${busyNote}</div>`;
   }).join("");
   document.getElementById("courtWrap").innerHTML =
     `<div class="court ${NEW.kind}"><div class="net"></div>${slotsHtml}</div>
@@ -77,8 +78,15 @@ function renderCourt() {
 }
 function rosterTap(pid) {
   const idx = NEW.slots.indexOf(pid);
-  if (idx >= 0) { NEW.slots[idx] = null; if (NEW.firstServe === pid) NEW.firstServe = null; }
-  else { const empty = NEW.slots.indexOf(null); if (empty >= 0) { NEW.slots[empty] = pid; if (NEW.firstServe == null) NEW.firstServe = pid; } }
+  if (idx >= 0) { NEW.slots[idx] = null; if (NEW.firstServe === pid) NEW.firstServe = null; renderCourt(); return; }
+  const p = PLAYERS.find(x => x.id === pid);
+  if (p && p.live) {                    // Task 6: can't pick a player already in a live match
+    const e = document.getElementById("startErr");
+    if (e) e.textContent = esc(p.name) + " is already in a live match — finish it first.";
+    return;
+  }
+  const empty = NEW.slots.indexOf(null);
+  if (empty >= 0) { NEW.slots[empty] = pid; if (NEW.firstServe == null) NEW.firstServe = pid; }
   renderCourt();
 }
 function slotTap(i) {

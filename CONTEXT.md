@@ -137,6 +137,34 @@ SQLite file `tennis.db` is created on first run (gitignored).
   fresh context shows the sign-in screen (Google/email — prod has Supabase keys); a junk token is
   cleared by the guard and the sign-in still renders. No console errors.
 
+## Sign-in outcomes surfaced + refresh-token sessions (latest — NOT deployed)
+- **Permanent rule: no sign-in outcome is ever swallowed.** Every failure path puts a reason on
+  screen; the sign-in card never silently reappears.
+- **OAuth return recorded (auth.js `captureOAuthReturn`).** On return from Supabase it inspects
+  BOTH the URL hash and query, then records `Auth.lastReturn()`: token→`{ok:true}`; error/
+  error_code/error_description→`{ok:false,error,description}`; a bare `?code=` (PKCE — we only do
+  implicit)→`{ok:false,error:"code_flow"}`; came-back-with-neither→`{ok:false,error:"empty"}`.
+  Hash/query are stripped via `history.replaceState` only AFTER recording; the outcome is
+  persisted in `sessionStorage` (try/catch-safe) so it survives the reload. `renderSignIn` shows
+  a one-time muted red line "Sign-in failed: <error> — <description>" (HTML-escaped, ≤200 chars).
+- **Server-rejected fresh token surfaced.** If `/api/auth/me` says `signed_in:false` while
+  `lastReturn().ok===true` (token minted THIS attempt), the guard records "Signed in with Google,
+  but the server rejected the session." A plain expired token still signs out silently.
+- **Refresh-token flow (sessions survive past ~1h).** `captureOAuthReturn` stores `refresh_token`
+  (`rally_refresh`). `Auth.refreshSession()` POSTs `${SUPABASE_URL}/auth/v1/token?grant_type=
+  refresh_token` (anon key as `apikey`); success→store new tokens, failure→clear both. The stale-
+  token guard, on `signed_in:false` WITH a refresh token, tries `refreshSession()` ONCE (bounded
+  by `raceTimeout`) and re-checks before signing out. No refresh token → behaves exactly as before.
+- **Boot fails open even without auth.js.** `failOpen()` now writes a "Rally couldn't start — tap
+  to retry" card (+Reload button) when `window.Auth` is missing or `showSignInGate` throws —
+  never a blank host.
+- **No group name before sign-in.** `shell.html` renders a neutral header (Rally / "tennis
+  scorer"); `setHeaderName()` swaps in the group name + code only after `/api/me` confirms a
+  signed-in session.
+- Files: `static/auth.js`, `static/app.js`, `templates/shell.html`. Tests: `test_boot.cjs`
+  extended (refresh-succeeds→kept, refresh-fails→clean sign-out no hang, no-refresh→as-before,
+  auth-missing→error card, fresh-token-reject→message). Suite: 80 Python + boot/engine/sync Node.
+
 ## Speed/UI revamp (in progress — read docs/mockup-v9.jsx, the owner-approved reference)
 - **Task 0 (done):** `docs/mockup-v9.jsx` (51,461 bytes) committed as the permanent UI reference.
 - **Task 1 (done): SPA shell.** All `/g/<code>/<tab>` + `/player/<id>` routes serve ONE

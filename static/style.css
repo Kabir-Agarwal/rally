@@ -208,6 +208,7 @@ input,select{font:inherit;padding:11px 12px;border:1.5px solid var(--line);borde
 .grouprow:last-child{border-bottom:none}
 .grouprow.cur{background:rgba(214,237,23,.14);border-radius:10px}
 .switcher .grp{cursor:pointer}
+.curmark{color:var(--live);font-weight:800;font-size:12px}
 
 /* history date edit */
 .editdt{background:none;border:none;cursor:pointer;font-size:13px;margin-left:6px}

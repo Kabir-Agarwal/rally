@@ -331,19 +331,20 @@ function openFunnel(which) {
 function closeFunnel() { const d = document.querySelector(".drawerwrap"); if (d) d.remove(); }
 
 // ================= GROUPS =================
-function renderAccount() {
-  const acc = document.getElementById("accountCard");
+// YOU card (mockup): avatar + game name + gold YOU badge + real-name subtext + "claimed on this
+// phone" + a "Change" button that opens the game-name/real-name editor (Task 4). Email + sign-out
+// live inside that editor so the card face stays as clean as the approved design.
+function renderYouCard() {
+  const host = document.getElementById("youCardG"); if (!host) return;
   const dn = ME.player_name || "—";
-  const gname = ME.group_name || GROUP.name || "this group";
   const real = ME.player_real_name ? `<div class="pn-real">${esc(ME.player_real_name)}</div>` : "";
-  acc.innerHTML = `<div class="row">
-    <span class="avatar" style="width:40px;height:40px;font-size:17px">${esc((dn[0] || "?").toUpperCase())}</span>
-    <div style="flex:1"><div class="pn-game" style="font-size:17px">${esc(dn)}</div>${real}
-      <div class="muted">${esc(ME.email || "")} · in ${esc(gname)}</div></div>
-    <div class="setcol" style="gap:6px;flex:0 0 auto">
-      <button class="btn sm ghost" style="width:auto" onclick="editName()">Edit name</button>
-      <button class="btn sm ghost" style="width:auto" onclick="Auth.signOut();location.reload()">Sign out</button></div></div>
-    <div id="editNameBox"></div>`;
+  host.innerHTML = `<div class="card">
+    <div class="row">
+      <span class="avatar" style="width:40px;height:40px;font-size:17px;flex:0 0 auto">${esc((dn[0] || "?").toUpperCase())}</span>
+      <div style="flex:1"><div class="pn-game" style="font-size:16px">${esc(dn)} <span class="youpill">YOU</span></div>${real}
+        <div class="muted">claimed on this phone</div></div>
+      <button class="btn sm ghost" style="flex:0 0 auto" onclick="editName()">Change</button></div>
+    <div id="editNameBox"></div></div>`;
 }
 function editName() {
   const box = document.getElementById("editNameBox");
@@ -366,27 +367,32 @@ async function saveName() {
     await api(`/g/${GROUP.code}/api/rename-me`, { name, real_name });
     ME = await api(`/g/${GROUP.code}/api/me`);
     setHeaderName(ME.group_name);
-    renderAccount();
+    renderYouCard();                                 // collapses the editor + shows the new name
   } catch (e) { err.textContent = e; }
 }
 async function initGroups() {
-  const cb = document.getElementById("grpCodeBig"); if (cb) cb.textContent = GROUP.code;
-  renderAccount();
+  renderYouCard();
   renderGroupRows();
 }
+// YOUR GROUPS: one card per group (mockup) — 🎾 name + green "· current", "code XXXX ·
+// private/public", and a Make public/private toggle.
 function renderGroupRows() {
   const host = document.getElementById("groupRows"); const gs = LS.groups(); host.innerHTML = "";
+  if (!gs.length) { host.innerHTML = '<div class="card"><div class="empty">No groups yet.</div></div>'; return; }
   gs.forEach(async g => {
     const cur = g.code === GROUP.code;
-    const row = el(`<div class="grouprow ${cur ? 'cur' : ''}">
-      <div style="flex:1"><b>${esc(g.name)}</b> <span class="tag">${g.code}</span> <span class="dw"></span></div>
-      <button class="btn sm ${g.is_public ? 'clay' : 'ghost'}" onclick="event.stopPropagation();flipPublic('${g.code}',this)">${g.is_public ? 'Public' : 'Private'}</button>
-      ${cur ? '<span class="tickmark">✓</span>' : ''}</div>`);
-    row.onclick = () => { if (!cur) location.href = "/g/" + g.code + "/live"; };
-    host.appendChild(row);
-    try { const d = await api(`/g/${g.code}/api/live`); if (d.matches.length) row.querySelector(".dw").innerHTML = '<span class="dot pulse"></span>'; } catch (e) { }
+    const card = el(`<div class="card">
+      <div class="row">
+        <div style="flex:1">
+          <div style="font-weight:800;font-size:14px">🎾 ${esc(g.name)}${cur ? ' <span class="curmark">· current</span>' : ''} <span class="dw"></span></div>
+          <div class="muted" style="margin-top:2px">code ${esc(g.code)} · ${g.is_public ? 'public' : 'private'}</div>
+        </div>
+        <button class="btn sm ${g.is_public ? 'clay' : 'ghost'}" style="flex:0 0 auto" onclick="event.stopPropagation();flipPublic('${g.code}',this)">${g.is_public ? 'Make private' : 'Make public'}</button>
+      </div></div>`);
+    if (!cur) { card.style.cursor = "pointer"; card.onclick = () => location.href = "/g/" + g.code + "/live"; }
+    host.appendChild(card);
+    try { const d = await api(`/g/${g.code}/api/live`); if (d.matches.length) card.querySelector(".dw").innerHTML = '<span class="dot pulse"></span>'; } catch (e) { }
   });
-  if (!gs.length) host.innerHTML = '<div class="empty">No groups yet.</div>';
 }
 async function flipPublic(code, btn) {
   const g = LS.groups().find(x => x.code === code); const next = !(g && g.is_public);
@@ -394,16 +400,37 @@ async function flipPublic(code, btn) {
     await api(`/g/${code}/api/public`, { is_public: next });
     if (g) { g.is_public = next; LS.add(g); }
     if (code === GROUP.code) GROUP.is_public = next;
-    btn.className = "btn sm " + (next ? "clay" : "ghost"); btn.textContent = next ? "Public" : "Private";
+    btn.className = "btn sm " + (next ? "clay" : "ghost"); btn.textContent = next ? "Make private" : "Make public";
+    const sub = btn.closest(".card").querySelector(".muted");
+    if (sub) sub.textContent = "code " + code + " · " + (next ? "public" : "private");
+    if (code === GROUP.code) setHeaderName(ME.group_name || GROUP.name);   // header sub reflects new visibility
   } catch (e) { }
+}
+// tap-to-expand create / join (mockup): the card shows "+ …" buttons that reveal an input row.
+function toggleCreate() {
+  const host = document.getElementById("createRow");
+  host.innerHTML = `<div class="row"><input id="newGroupName" placeholder="Group name" autofocus>
+    <button class="btn sm" style="flex:0 0 auto" onclick="createGroup()">Create</button></div><div id="createOut" class="note"></div>`;
+  const inp = host.querySelector("#newGroupName");
+  inp.focus(); inp.addEventListener("keydown", e => { if (e.key === "Enter") createGroup(); });
+}
+function toggleJoin() {
+  const host = document.getElementById("joinRow");
+  host.innerHTML = `<div class="row"><input id="joinCode2" maxlength="6" placeholder="Group code" style="text-transform:uppercase" autofocus>
+    <button class="btn sm clay" style="flex:0 0 auto" onclick="joinGroup()">Join</button></div>`;
+  const inp = host.querySelector("#joinCode2");
+  inp.focus(); inp.addEventListener("keydown", e => { if (e.key === "Enter") joinGroup(); });
 }
 async function createGroup() {
   const name = document.getElementById("newGroupName").value.trim(); const out = document.getElementById("createOut");
   if (!name) { out.textContent = "name required"; return; }
   try {
     const g = await api("/api/group/create", { name }); LS.add(g);
-    out.innerHTML = `Created <b>${g.code}</b> — <a href="/g/${g.code}/live">enter ▶</a>`;
-    document.getElementById("codeShare").textContent = g.code; document.getElementById("codeShareBox").style.display = "block";
+    document.getElementById("justCreated").innerHTML = `<div class="card" style="border:2px solid var(--clay)">
+      <div style="font-weight:800">✔ ${esc(g.name)} created</div>
+      <div style="margin-top:4px">Share this code with your friends: <b style="font-size:16px;letter-spacing:2px">${esc(g.code)}</b>
+      · <a href="/g/${g.code}/live">enter ▶</a></div></div>`;
+    document.getElementById("createRow").innerHTML = `<button class="btn ghost sm" onclick="toggleCreate()">+ Create a group</button>`;
     renderGroupRows();
   } catch (e) { out.textContent = e; }
 }
@@ -537,16 +564,13 @@ const TAB_SKELETONS = {
     <div id="rankList" class="card" style="padding:2px 2px"><div class="empty">Loading…</div></div>
     <div id="provWrap"></div>`,
   log: `<div id="logRoot"><div class="empty">Loading…</div></div>`,
-  groups: `<div class="sec-title">Account</div><div class="card" id="accountCard"></div>
-    <div class="card"><div style="font-weight:800">This group</div><div class="bignum" id="grpCodeBig"></div>
-      <div class="note">Anyone with this code can watch. Signed-in members can score.</div></div>
-    <div class="sec-title">Your groups</div><div id="groupRows" class="card" style="padding:6px 6px"></div>
-    <div class="card"><div style="font-weight:800;margin-bottom:6px">+ Create a group</div>
-      <div class="row"><input id="newGroupName" placeholder="group name"><button class="btn sm" onclick="createGroup()">Create</button></div>
-      <div id="createOut" class="note"></div>
-      <div id="codeShareBox" style="display:none"><div class="muted" style="margin-top:6px">Share this code:</div><div class="bignum" id="codeShare"></div></div>
-      <div style="font-weight:800;margin:12px 0 6px">+ Join another group</div>
-      <div class="row"><input id="joinCode2" maxlength="6" placeholder="code" style="text-transform:uppercase"><button class="btn sm clay" onclick="joinGroup()">Join</button></div>
+  groups: `<div class="sec-title">You</div><div id="youCardG"></div>
+    <div id="justCreated"></div>
+    <div class="sec-title">Your groups</div><div id="groupRows"></div>
+    <div class="card">
+      <div id="createRow"><button class="btn ghost sm" onclick="toggleCreate()">+ Create a group</button></div>
+      <div style="height:8px"></div>
+      <div id="joinRow"><button class="btn ghost sm" onclick="toggleJoin()">+ Join another group</button></div>
       <div id="joinOut2" class="err"></div></div>`,
   history: `<div class="row" style="margin:12px 16px 0">
       <div class="sec-title" style="margin:0;flex:1">History <span id="histScopeLine" class="scopeinline"></span></div>
@@ -697,36 +721,59 @@ function initLanding() {
     raceTimeout(Auth.refreshEmail(), 4000, null).then(() => { if (Auth.email()) renderLanding(host); });
   }
 }
+// Landing is group-agnostic (no per-group player yet), so its YOU card shows the signed-in
+// email + Sign out in place of the game-name/Change editor that the in-group Groups tab has.
 function renderLanding(host) {
+  const em = Auth.email() || "";
   host.innerHTML = `
+    <div class="sec-title">You</div>
+    <div class="card"><div class="row">
+      <span class="avatar" style="width:40px;height:40px;font-size:17px;flex:0 0 auto">${esc((em[0] || "?").toUpperCase())}</span>
+      <div style="flex:1"><div class="pn-game" style="font-size:15px">${em ? esc(em) : "Signed in"}</div>
+        <div class="muted">signed in on this phone</div></div>
+      <button class="btn sm ghost" style="flex:0 0 auto" onclick="Auth.signOut();location.reload()">Sign out</button></div></div>
     <div id="myGroups"></div>
-    <div class="card"><div style="font-weight:800;margin-bottom:8px">Join a group</div>
-      <div class="row"><input id="joinCode" maxlength="6" placeholder="6-char code" style="text-transform:uppercase">
-      <button class="btn sm clay" onclick="landJoin()">Join</button></div><div class="err" id="joinErr"></div></div>
-    <div class="card"><div style="font-weight:800;margin-bottom:8px">Create a group</div>
-      <div class="row"><input id="grpName" placeholder="group name"><button class="btn sm" onclick="landCreate()">Create</button></div>
-      <div class="err" id="createErr"></div><div id="createDone" style="display:none">
-      <div class="muted">Share this code:</div><div class="bignum" id="newCode"></div>
-      <button class="btn" style="margin-top:10px" id="enterBtn">Enter ▶</button></div></div>
-    <div class="card" style="text-align:center"><span class="muted">${esc(Auth.email())}</span> · <a href="#" onclick="Auth.signOut();location.reload();return false">sign out</a></div>`;
+    <div id="landCreated"></div>
+    <div class="card">
+      <div id="lCreateRow"><button class="btn ghost sm" onclick="landToggleCreate()">+ Create a group</button></div>
+      <div style="height:8px"></div>
+      <div id="lJoinRow"><button class="btn ghost sm" onclick="landToggleJoin()">+ Join a group</button></div>
+      <div class="err" id="joinErr"></div></div>`;
   renderMyGroups();
 }
 function renderMyGroups() {
   const host = document.getElementById("myGroups"); if (!host) return;
   const gs = LS.groups(); if (!gs.length) { host.innerHTML = ""; return; }
-  host.innerHTML = `<div class="sec-title">Your groups</div>`;
-  const card = el(`<div class="card" style="padding:4px 4px"></div>`);
-  gs.forEach(g => card.appendChild(el(`<div class="lbrow" onclick="location.href='/g/${g.code}/live'"><div class="nm">${esc(g.name)}</div><div class="tag">${g.code}</div></div>`)));
-  host.appendChild(card);
+  host.innerHTML = `<div class="sec-title">Your groups</div>` +
+    gs.map(g => `<div class="card" style="cursor:pointer" onclick="location.href='/g/${g.code}/live'">
+      <div style="font-weight:800;font-size:14px">🎾 ${esc(g.name)}</div>
+      <div class="muted" style="margin-top:2px">code ${esc(g.code)}</div></div>`).join("");
+}
+function landToggleCreate() {
+  const host = document.getElementById("lCreateRow");
+  host.innerHTML = `<div class="row"><input id="grpName" placeholder="Group name" autofocus>
+    <button class="btn sm" style="flex:0 0 auto" onclick="landCreate()">Create</button></div><div class="err" id="createErr"></div>`;
+  const inp = host.querySelector("#grpName"); inp.focus();
+  inp.addEventListener("keydown", e => { if (e.key === "Enter") landCreate(); });
+}
+function landToggleJoin() {
+  const host = document.getElementById("lJoinRow");
+  host.innerHTML = `<div class="row"><input id="joinCode" maxlength="6" placeholder="6-char code" style="text-transform:uppercase" autofocus>
+    <button class="btn sm clay" style="flex:0 0 auto" onclick="landJoin()">Join</button></div>`;
+  const inp = host.querySelector("#joinCode"); inp.focus();
+  inp.addEventListener("keydown", e => { if (e.key === "Enter") landJoin(); });
 }
 async function landCreate() {
   const name = document.getElementById("grpName").value.trim(); const err = document.getElementById("createErr"); err.textContent = "";
   if (!name) { err.textContent = "name required"; return; }
   try {
     const g = await api("/api/group/create", { name }); LS.add(g);
-    document.getElementById("createDone").style.display = "block";
-    document.getElementById("newCode").textContent = g.code;
-    document.getElementById("enterBtn").onclick = () => location.href = "/g/" + g.code + "/live";
+    document.getElementById("landCreated").innerHTML = `<div class="card" style="border:2px solid var(--clay)">
+      <div style="font-weight:800">✔ ${esc(g.name)} created</div>
+      <div style="margin-top:4px">Share this code: <b style="font-size:16px;letter-spacing:2px">${esc(g.code)}</b></div>
+      <button class="btn" style="margin-top:10px" onclick="location.href='/g/${g.code}/live'">Enter ▶</button></div>`;
+    document.getElementById("lCreateRow").innerHTML = `<button class="btn ghost sm" onclick="landToggleCreate()">+ Create a group</button>`;
+    renderMyGroups();
   } catch (e) { err.textContent = e; }
 }
 async function landJoin() {

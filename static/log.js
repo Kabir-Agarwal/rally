@@ -71,9 +71,9 @@ function renderCourt() {
     return `<div class="chip ${sel ? 'sel' : ''} ${p.live && !sel ? 'busy' : ''}" onclick="rosterTap(${p.id})">${live}${esc(p.name)}${real}${busyNote}</div>`;
   }).join("");
   document.getElementById("courtWrap").innerHTML =
-    `<div class="court ${NEW.kind}"><div class="net"></div>${slotsHtml}</div>
-     <div class="muted" style="margin-top:8px">Tap to fill · tap a placed player for first serve 🎾</div>
-     <div class="chips" style="margin-top:6px">${roster || '<span class="muted">No players yet — sign in and set up your player.</span>'}</div>`;
+    `<div class="chips" style="margin-top:6px">${roster || '<span class="muted">No players yet — sign in and set up your player.</span>'}</div>
+     <div class="court ${NEW.kind}"><div class="net"></div>${slotsHtml}</div>
+     <div class="muted" style="margin-top:8px">Tap a chip to place · tap a placed player for first serve 🎾</div>`;
   renderChem(); updateStartBtn();
 }
 function rosterTap(pid) {

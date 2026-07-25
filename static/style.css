@@ -255,3 +255,10 @@ input,select{font:inherit;padding:11px 12px;border:1.5px solid var(--line);borde
   background:#fff;color:#fff;font-size:13px;line-height:17px;text-align:center;font-weight:900}
 .fcheck.on .fbox{border-color:var(--clay);background:var(--clay)}
 .fg{display:flex;flex-direction:column}
+
+/* ---------- Task 7: mockup reconciliation ---------- */
+.bhead2{display:flex;align-items:center;padding:7px 12px;background:var(--sand);
+  border-radius:12px 12px 0 0;margin:-12px -14px 8px}
+.bkind{flex:1;font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:1px}
+.livepill{font-size:10px;font-weight:800;color:#fff;background:var(--live);border-radius:20px;padding:2px 8px}
+.rt.pos{color:var(--ink)} .rt.neg{color:#c0392b} .rt.zero{color:var(--muted)}

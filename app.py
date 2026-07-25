@@ -105,7 +105,7 @@ def match_view(con, m):
            for r in mps if r["rotation_pos"]]
     rot.sort(key=lambda x: x["pos"])
     v = {"id": mid, "kind": m["kind"], "status": m["status"], "played_on": m["played_on"],
-         "side1": s1, "side2": s2, "rotation": rot}
+         "started_at": m["started_at"], "side1": s1, "side2": s2, "rotation": rot}
 
     if m["kind"] == "tt":
         games = db.tt_games(con, mid)

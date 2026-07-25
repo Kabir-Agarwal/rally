@@ -179,22 +179,31 @@ function winBar(wp, kind) {
     <span class="wpend right">${b.pct}% · ${esc(b.label)}</span></div>`;
 }
 
+function hhmm(iso) {
+  if (!iso) return "";
+  const d = new Date(iso.replace(" ", "T"));
+  if (isNaN(d)) return "";
+  let h = d.getHours(), m = String(d.getMinutes()).padStart(2, "0");
+  const ap = h >= 12 ? "PM" : "AM"; h = h % 12 || 12;
+  return `${h}:${m} ${ap}`;
+}
+function bhead(kindLabel, m) {
+  const t = hhmm(m.started_at);
+  return `<div class="bhead2"><span class="bkind">${kindLabel}${t ? ` · started ${t}` : ""}</span><span class="livepill">LIVE</span></div>`;
+}
 function broadcastCard(m) {
-  const started = (m.played_on || "");
   if (m.kind === "tt") {
     const p = m.pairing;
-    let head = `<div class="bhead">TRIPLE THREAT · LIVE</div>`;
     let strip = `<div class="ttstrip">` + m.tally.map(t => `<div class="ttcell">${pBlock(t)}<b class="ttwins">${t.wins}</b></div>`).join("") + `</div>`;
     let line = p ? `<div class="server">Server 🎾 ${esc(p.server)} · ${esc(p.receiver)} Receiver</div>
       <div class="muted">Game ${m.game_no + 1} · ${esc(p.sitter)} sits out</div>` : "";
-    return el(`<div class="bcast">${head}${strip}${line}${winBar(m.win_prob, "tt")}${m.group ? `<div class="note">${esc(m.group)}</div>` : ""}</div>`);
+    return el(`<div class="bcast">${bhead("Triple threat", m)}${strip}${line}${winBar(m.win_prob, "tt")}${m.group ? `<div class="note">${esc(m.group)}</div>` : ""}</div>`);
   }
-  const w1 = m.winner_side === 1, w2 = m.winner_side === 2;
   const side = (arr) => arr.map(p => `<div class="bname">${p.id === m.server_id ? '🎾 ' : ''}${pBlock(p)}</div>`).join("");
   let cols = m.sets.map(s => `<div class="setcol"><div class="setcell ${s.won1 ? 'won' : ''}">${s.g1}</div><div class="setcell ${s.won2 ? 'won' : ''}">${s.g2}</div></div>`).join("");
   let pts = (m.per_point && m.point_score) ? `<div class="ptsbox">${esc(m.point_score)}</div>` : "";
   return el(`<div class="bcast">
-    <div class="bhead">${m.kind.toUpperCase()} · LIVE</div>
+    ${bhead(m.kind.charAt(0).toUpperCase() + m.kind.slice(1), m)}
     <div class="brow"><div class="bteam">${side(m.side1)}</div><div class="bsets">${cols}</div>${pts}</div>
     <div class="brow"><div class="bteam">${side(m.side2)}</div></div>
     ${winBar(m.win_prob, m.kind)}${m.group ? `<div class="note">${esc(m.group)}</div>` : ""}</div>`);
@@ -233,10 +242,12 @@ function rankRow(r, mePid) {
   const dot = r.live ? '<span class="dot pulse"></span>' : '<span class="dotspace"></span>';
   const tag = r.group ? `<span class="tag">${esc(r.group)}</span>` : "";
   const rating = dispFromEloRow(r);
+  const v = r.rating - 1200;
+  const cls = v > 0 ? "pos" : v < 0 ? "neg" : "zero";
   return `<div class="lbrow ${you ? 'you' : ''}" onclick="openPlayer(${r.id})">
     <div class="rk">${r.rank || '–'}</div>${av(r.name)}
     <div class="nm">${dot}${pBlock(r)}${tag}${you ? ' <span class="youpill">YOU</span>' : ''}<div class="tapstats">tap for stats</div></div>
-    <div class="rt">${rating}</div></div>`;
+    <div class="rt ${cls}">${rating}</div></div>`;
 }
 const dispFromEloRow = (r) => { const v = r.rating - 1200; return (v > 0 ? "+" : "") + v; };
 function renderRanks() {

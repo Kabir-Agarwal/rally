@@ -649,9 +649,13 @@ function _errorCard(host) {
 function failOpen() {
   if (window.PAGE === "landing") {
     const host = document.getElementById("landingContent");
-    if (host && window.Auth) { try { Auth.renderSignIn(host, () => location.reload()); } catch (e) { host.innerHTML = ""; } }
+    if (host && window.Auth && Auth.renderSignIn) {
+      try { Auth.renderSignIn(host, () => location.reload()); } catch (e) { _errorCard(host); }
+    } else {
+      _errorCard(host);                                 // auth.js missing -> explain, never blank
+    }
   } else {
-    try { showSignInGate(); } catch (e) { }
+    try { showSignInGate(); } catch (e) { _errorCard(document.getElementById("tabContent")); }
   }
 }
 async function boot() {

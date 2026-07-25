@@ -183,16 +183,23 @@ const disp = (elo0based) => (elo0based > 0 ? "+" : "") + elo0based;   // meta al
 const dispFromElo = (elo) => { const v = Math.round(elo) - 1200; return (v > 0 ? "+" : "") + v; };
 
 // ---------- shared: broadcast/scoreboard card (read-only) ----------
+// Win-prob bar (mockup): a labels row, ONE segmented track, and a caption saying it updates
+// live. 2-way = green fill on the line track; 3-way = green/gold/line segments in one bar.
 function winBar(wp, kind) {
   if (!wp || !wp.length) return "";
   if (kind === "tt") {
-    return `<div class="wp3">` + wp.map(w =>
-      `<div class="wp3seg"><div class="wp3name">${esc(w.label)}</div><div class="wp3pct">${w.pct}%</div></div>`).join("") + `</div>`;
+    const cols = ["var(--live)", "var(--gold)", "var(--line)"];
+    const labels = wp.map(w => `<span>${esc(w.label)} · ${w.pct}%</span>`).join("");
+    const segs = wp.map((w, i) => `<span class="wpseg" style="width:${w.pct}%;background:${cols[i] || 'var(--line)'}"></span>`).join("");
+    return `<div class="wpwrap"><div class="wplabels">${labels}</div>
+      <div class="wptrack">${segs}</div>
+      <div class="wpcap">updates live with every point, from ratings + games won</div></div>`;
   }
   const a = wp[0], b = wp[1];
-  return `<div class="wp2"><span class="wpend">${esc(a.label)} · ${a.pct}%</span>
-    <span class="wpbar"><span class="wpfill" style="width:${a.pct}%"></span></span>
-    <span class="wpend right">${b.pct}% · ${esc(b.label)}</span></div>`;
+  return `<div class="wpwrap">
+    <div class="wplabels"><span>${esc(a.label)} · ${a.pct}%</span><span class="right">${b.pct}% · ${esc(b.label)}</span></div>
+    <div class="wptrack"><span class="wpseg" style="width:${a.pct}%;background:var(--live)"></span></div>
+    <div class="wpcap">updates live with every point, from ratings + current score</div></div>`;
 }
 
 function hhmm(iso) {

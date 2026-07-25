@@ -194,14 +194,13 @@ input,select{font:inherit;padding:11px 12px;border:1.5px solid var(--line);borde
 .ttcell{background:var(--sand);border-radius:8px;padding:4px 10px;font-size:13px;font-weight:700}
 .winr{font-weight:800}
 
-/* win-prob bars */
-.wp2{display:flex;align-items:center;gap:6px;margin-top:8px;font-size:11px;font-weight:700}
-.wpend{white-space:nowrap;color:var(--muted)}.wpend.right{text-align:right}
-.wpbar{flex:1;height:8px;background:var(--team2);border-radius:6px;overflow:hidden}
-.wpfill{display:block;height:100%;background:var(--team1)}
-.wp3{display:flex;gap:6px;margin-top:8px}
-.wp3seg{flex:1;background:var(--sand);border-radius:8px;padding:4px;text-align:center}
-.wp3name{font-size:11px;font-weight:700}.wp3pct{font-weight:900;color:var(--clay-deep)}
+/* win-prob bars (single segmented track + caption, per mockup) */
+.wpwrap{margin-top:8px}
+.wplabels{display:flex;justify-content:space-between;gap:6px;font-size:11px;font-weight:800;color:var(--muted);margin-bottom:4px}
+.wplabels .right{text-align:right}
+.wptrack{display:flex;height:8px;border-radius:6px;overflow:hidden;background:var(--line)}
+.wpseg{display:block;height:100%}
+.wpcap{font-size:10px;color:var(--muted);margin-top:4px}
 
 /* groups + account */
 .grouprow{display:flex;align-items:center;gap:8px;padding:9px 8px;border-bottom:1px solid var(--line);cursor:pointer}

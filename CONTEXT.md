@@ -116,6 +116,27 @@ SQLite file `tennis.db` is created on first run (gitignored).
   live here — the smoke test `test_db_backend.py` compiles the schema for the Postgres dialect
   (no live PG), and asserts the metadata matches the SQLite SCHEMA.
 
+## "Loading…" hang FIXED + deployed live (latest)
+- **Root cause:** on the LANDING page only `auth.js`+`app.js` load (not `log.js`). `app.js` had a
+  top-level `const TAB_INIT = {…, log: initLog, …}` — `initLog` (from log.js) was undefined there,
+  so the line threw a ReferenceError that crashed `app.js` before the boot even ran → the
+  "Loading…" placeholder was never replaced. Fix: `TAB_INIT` uses lazy arrow wrappers so those
+  names resolve only at call time (a group page, where log.js is present).
+- **Fail-open boot (Task 1):** `staleTokenGuard()` checks `/api/auth/me` and `Auth.signOut()`s on
+  `signed_in:false`; every awaited boot fetch is wrapped in `raceTimeout(…,4s,fallback)`; boot has
+  try/catch + a 4.5s backstop → always renders the sign-in view, never a stuck placeholder;
+  once-guarded `startBoot` is triggered by readyState/`load`/`setTimeout(0)` (a late-added
+  DOMContentLoaded listener doesn't fire in some embedded browsers). `initLanding` renders first,
+  refreshes email in the background. `auth.js` `config()` is timeout-bounded too. Test: `test_boot.cjs`.
+- **Cache-busting (Task 2):** `app.ASSET_V` = short md5 of the client JS/CSS, appended as
+  `?v=<hash>` to every `<script>/<link>` (shell/landing/admin). New deploy → new hash → phones
+  fetch fresh JS, not a stale cached copy.
+- **Deploy (Task 4):** `deploy.py` file-uploads git-tracked files + `static/mockup-v9.jsx` to
+  Vercel production `rally-scorer` (token from `VERCEL_TOKEN` env, never committed). Deployment
+  `dpl_2NRqoqjqrWvtG8WiofnDQQta66kx` → READY. Verified LIVE at https://rally-scorer.vercel.app:
+  fresh context shows the sign-in screen (Google/email — prod has Supabase keys); a junk token is
+  cleared by the guard and the sign-in still renders. No console errors.
+
 ## Speed/UI revamp (in progress — read docs/mockup-v9.jsx, the owner-approved reference)
 - **Task 0 (done):** `docs/mockup-v9.jsx` (51,461 bytes) committed as the permanent UI reference.
 - **Task 1 (done): SPA shell.** All `/g/<code>/<tab>` + `/player/<id>` routes serve ONE

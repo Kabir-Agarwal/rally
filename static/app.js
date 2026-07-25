@@ -13,6 +13,8 @@ function nameBlock(name, real) {
     (real ? `<div class="pn-real">${esc(real)}</div>` : "") + `</div>`;
 }
 const pBlock = (p) => nameBlock(p.name, p.real_name);
+// clickable name block -> opens that player's page (Live cards, History cards)
+const pLink = (p) => `<span class="plink" onclick="event.stopPropagation();openPlayer(${p.id})">${pBlock(p)}</span>`;
 
 async function api(url, body, method) {
   const m = method || (body ? "POST" : "GET");
@@ -194,12 +196,12 @@ function bhead(kindLabel, m) {
 function broadcastCard(m) {
   if (m.kind === "tt") {
     const p = m.pairing;
-    let strip = `<div class="ttstrip">` + m.tally.map(t => `<div class="ttcell">${pBlock(t)}<b class="ttwins">${t.wins}</b></div>`).join("") + `</div>`;
+    let strip = `<div class="ttstrip">` + m.tally.map(t => `<div class="ttcell">${pLink(t)}<b class="ttwins">${t.wins}</b></div>`).join("") + `</div>`;
     let line = p ? `<div class="server">Server 🎾 ${esc(p.server)} · ${esc(p.receiver)} Receiver</div>
       <div class="muted">Game ${m.game_no + 1} · ${esc(p.sitter)} sits out</div>` : "";
     return el(`<div class="bcast">${bhead("Triple threat", m)}${strip}${line}${winBar(m.win_prob, "tt")}${m.group ? `<div class="note">${esc(m.group)}</div>` : ""}</div>`);
   }
-  const side = (arr) => arr.map(p => `<div class="bname">${p.id === m.server_id ? '🎾 ' : ''}${pBlock(p)}</div>`).join("");
+  const side = (arr) => arr.map(p => `<div class="bname">${p.id === m.server_id ? '🎾 ' : ''}${pLink(p)}</div>`).join("");
   let cols = m.sets.map(s => `<div class="setcol"><div class="setcell ${s.won1 ? 'won' : ''}">${s.g1}</div><div class="setcell ${s.won2 ? 'won' : ''}">${s.g2}</div></div>`).join("");
   let pts = (m.per_point && m.point_score) ? `<div class="ptsbox">${esc(m.point_score)}</div>` : "";
   return el(`<div class="bcast">
@@ -410,9 +412,9 @@ async function loadHistory() {
   if (!matches.length) { host.innerHTML = `<div class="empty">No finished matches.</div>`; return; }
   matches.forEach(m => host.appendChild(historyCard(m)));
 }
-function teamBlocks(arr) { return arr.map(pBlock).join('<span class="amp">&</span>'); }
+function teamBlocks(arr) { return arr.map(pLink).join('<span class="amp">&</span>'); }
 function matchTitle(m) {
-  if (m.kind === "tt") return `<div class="side">${m.rotation.map(pBlock).join('<span class="amp">·</span>')}</div>`;
+  if (m.kind === "tt") return `<div class="side">${m.rotation.map(pLink).join('<span class="amp">·</span>')}</div>`;
   const w1 = m.winner_side === 1, w2 = m.winner_side === 2;
   return `<div class="side ${w1 ? 'winr' : ''}">${teamBlocks(m.side1)}${w1 ? ' 🏆' : ''}</div>
     <div class="vs">vs</div><div class="side ${w2 ? 'winr' : ''}">${teamBlocks(m.side2)}${w2 ? ' 🏆' : ''}</div>`;

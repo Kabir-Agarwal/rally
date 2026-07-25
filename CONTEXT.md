@@ -129,8 +129,22 @@ SQLite file `tennis.db` is created on first run (gitignored).
   URL). Never self-vs-self. (Was broken because the old route/build; now an overlay.)
 - **Task 5 (done): FunnelDrawer.** Right-side drawer (Mode/Kind + Who checkboxes + Apply) on
   Ranks and History; filters change the list; History `scope=everyone` aggregates public groups.
-- **Still to do this session:** Task 2 (cache ratings), Task 3 (cold start), Task 6 (one live
-  match/player enforced server-side), Task 7 (full UI reconciliation vs mockup), Task 8 (QA).
+- **Task 2 (done):** in-process rating cache keyed by `groups.ratings_rev` (bumped only on
+  rating-affecting writes). ~721x faster reads; `test_cache.py` proves cached==fresh + invalidation.
+- **Task 3 (done):** Postgres cold-start init cut from ~14 round-trips to 1 (presence check);
+  SQLAlchemy/psycopg lazy. Local import ~0.7s (FastAPI floor); Vercel container spin-up is platform.
+- **Task 6 (done):** one live match/player enforced in `start_match` (named error); past results
+  exempt; picker greys busy players. `test_one_live.py`.
+- **Task 7 (done):** Live cards 'KIND · started H:MM' + LIVE pill; court chips above court; Ranks
+  rating colored. Rest already matched the mockup.
+- **Task 4 (complete):** tapping a player on Ranks, **Live cards, and History cards** opens the
+  overlay (`pLink`). Log picker chips PLACE players (mockup behavior), not navigate.
+- **Task 8 (done):** hand-QA — tab switches 1.8–5ms; score singles + undo; player pages from
+  every surface; filters change results; one-live enforced; no console errors.
+- **Known deviations (not fixed):** (1) Live TT card shows tally + pairing + 'Game N · X sits out'
+  but NOT the running within-game '30 · 40' point score — TT persists only completed games, not
+  sub-game points (the scorer sees live points locally in the Log editor). (2) Old per-tab
+  templates + player.html are dead (shell replaces them), left in repo.
 
 ## V2 status: COMPLETE + names/sign-in revamp (Tasks 0–8, onboarding, names+sign-in)
 All built, tested, committed. 73 Python + 2 Node tests green. Deploy needs env vars

@@ -30,13 +30,28 @@ app.mount("/static", StaticFiles(directory=BASE / "static"), name="static")
 
 @app.middleware("http")
 async def _no_cache_static(request: Request, call_next):
-    # Serve fresh JS/CSS — avoids stale assets after a deploy (and during dev). Tiny app,
-    # revalidation cost is negligible; content-hashed filenames would be the scale upgrade.
+    # Serve fresh JS/CSS — avoids stale assets after a deploy (and during dev).
     resp = await call_next(request)
     if request.url.path.startswith("/static/"):
         resp.headers["Cache-Control"] = "no-cache"
     return resp
+
+
+def _asset_version():
+    """Short content hash of the client assets. Appended as ?v=… to every <script>/<link>
+    so a new deploy is ALWAYS fetched fresh, even if a phone cached the old file."""
+    import hashlib
+    h = hashlib.md5()
+    for f in ("app.js", "auth.js", "engine.js", "sync.js", "log.js", "style.css"):
+        p = BASE / "static" / f
+        if p.exists():
+            h.update(p.read_bytes())
+    return h.hexdigest()[:10]
+
+
+ASSET_V = _asset_version()
 templates = Jinja2Templates(directory=BASE / "templates")
+templates.env.globals["v"] = ASSET_V     # available in every template as {{ v }}
 
 db.init_db()
 

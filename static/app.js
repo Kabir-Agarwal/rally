@@ -616,12 +616,35 @@ window.addEventListener("popstate", () => {
 // If a token exists, ask the server if the session is real. A definitive "no" (signed_in:false)
 // clears the stale token. A timeout/error does NOT nuke a possibly-valid token — the boot just
 // fails open to the sign-in view. Bounded by raceTimeout so it can't hang.
-async function staleTokenGuard() {
-  if (!(window.Auth && Auth.signedIn())) return;
-  const me = await raceTimeout(
+function _fetchMe() {
+  return raceTimeout(
     fetch("/api/auth/me", { headers: Auth.headers() }).then(r => (r.ok ? r.json() : null)).catch(() => null),
     4000, null);
-  if (me && me.signed_in === false) Auth.signOut();   // server rejected the token -> clear it
+}
+async function staleTokenGuard() {
+  if (!(window.Auth && Auth.signedIn())) return;
+  let me = await _fetchMe();
+  if (!(me && me.signed_in === false)) return;          // valid, or couldn't tell (fail open)
+  // Server rejected the token. If a refresh token exists, try ONCE to renew (Task 3: sessions
+  // shouldn't die every hour) and re-check before giving up.
+  if (Auth.refreshToken && Auth.refreshToken()) {
+    const refreshed = await raceTimeout(Auth.refreshSession(), 5000, false);
+    if (refreshed) { me = await _fetchMe(); if (!(me && me.signed_in === false)) return; }
+  }
+  // Definitively rejected. If this token was captured during THIS sign-in attempt, say why
+  // instead of silently bouncing back to the card (Task 2). A plain expired token stays silent.
+  const lr = Auth.lastReturn && Auth.lastReturn();
+  if (lr && lr.ok === true) {
+    Auth.recordReturn({ ok: false, message: "Signed in with Google, but the server rejected the session." });
+  }
+  Auth.signOut();
+}
+function _errorCard(host) {
+  if (!host) return;
+  host.innerHTML = `<div class="card" style="text-align:center;margin-top:24px">
+    <div style="font-weight:800">Rally couldn't start</div>
+    <div class="muted" style="margin:6px 0 10px">tap to retry</div>
+    <button class="btn" onclick="location.reload()">Reload</button></div>`;
 }
 function failOpen() {
   if (window.PAGE === "landing") {

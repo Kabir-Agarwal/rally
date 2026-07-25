@@ -169,10 +169,14 @@ input,select{font:inherit;padding:11px 12px;border:1.5px solid var(--line);borde
 .chip.sel{box-shadow:0 0 0 2px var(--yellow)}
 .pickchip.sel{box-shadow:0 0 0 2px var(--yellow)}
 
-/* chemistry */
+/* chemistry (boxed team rows, per mockup) */
 .chemrow{margin:8px 4px 0;font-size:13px}
-.chem.pos{color:var(--live);font-weight:800}
-.chem.neg{color:#c0392b;font-weight:800}
+.chembox{display:flex;align-items:center;gap:8px;background:#fff;border:1.5px solid var(--line);
+  border-radius:10px;padding:7px 10px;margin-top:8px}
+.chemteam{font-size:11px;font-weight:800;width:52px;flex:0 0 auto}
+.chemlab{font-size:12px;font-weight:800;color:var(--muted);flex:1}
+.chem.pos{color:var(--live);font-weight:900}
+.chem.neg{color:#c0392b;font-weight:900}
 
 /* live editor */
 .edhead{font-weight:800;display:flex;align-items:center;gap:8px;flex-wrap:wrap}

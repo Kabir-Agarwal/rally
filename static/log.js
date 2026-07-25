@@ -93,20 +93,30 @@ function slotTap(i) {
   const pid = NEW.slots[i]; if (!pid || NEW.kind === "tt") return;   // TT: first-placed serves (fixed)
   NEW.firstServe = pid; renderCourt();
 }
+// Boxed chemistry rows per the mockup: TEAM label (team colour) · "Chemistry" · score /
+// "Unexplored — N more…" / "pick both players". Both team rows always show for doubles.
 function renderChem() {
   const host = document.getElementById("chemRows"); if (!host) return;
   if (NEW.kind !== "doubles") { host.innerHTML = ""; return; }
   const teams = [[NEW.slots[0], NEW.slots[1]], [NEW.slots[2], NEW.slots[3]]];
+  const cols = ["var(--team1)", "var(--team2)"];
   host.innerHTML = teams.map((t, n) => {
-    if (!t[0] || !t[1]) return "";
-    const key = [Math.min(t[0], t[1]), Math.max(t[0], t[1])].join("_");
-    const pr = PAIRS[key];
-    if (!pr || pr.n < PAIRPROV) {
-      const need = PAIRPROV - (pr ? pr.n : 0);
-      return `<div class="chemrow"><b>TEAM ${n + 1}</b> · Chemistry · <span class="muted">Unexplored — ${need} more match${need === 1 ? '' : 'es'} needed</span></div>`;
+    let val;
+    if (!t[0] || !t[1]) {
+      val = `<span class="muted">pick both players</span>`;
+    } else {
+      const key = [Math.min(t[0], t[1]), Math.max(t[0], t[1])].join("_");
+      const pr = PAIRS[key];
+      if (!pr || pr.n < PAIRPROV) {
+        const need = PAIRPROV - (pr ? pr.n : 0);
+        val = `<span class="muted" style="font-weight:800">Unexplored — ${need} more match${need === 1 ? '' : 'es'} needed</span>`;
+      } else {
+        const sign = pr.rating >= 0 ? "pos" : "neg";
+        val = `<span class="chem ${sign}" style="font-size:15px">${pr.rating >= 0 ? '+' : ''}${pr.rating}</span>`;
+      }
     }
-    const sign = pr.rating >= 0 ? "pos" : "neg";
-    return `<div class="chemrow"><b>TEAM ${n + 1}</b> · Chemistry · <span class="chem ${sign}">${pr.rating >= 0 ? '+' : ''}${pr.rating}</span></div>`;
+    return `<div class="chembox"><span class="chemteam" style="color:${cols[n]}">TEAM ${n + 1}</span>
+      <span class="chemlab">Chemistry</span>${val}</div>`;
   }).join("");
 }
 function anyLiveInGroup() { return PLAYERS.some(p => p.live); }

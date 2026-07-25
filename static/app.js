@@ -64,7 +64,11 @@ function showSignInGate() {
   document.querySelector(".app").appendChild(gate);
   Auth.renderSignIn(gate, () => location.reload());
 }
-function setHeaderName(name) { const el2 = document.getElementById("hdName"); if (el2 && name) el2.textContent = name; }
+function setHeaderName(name) {
+  const el2 = document.getElementById("hdName"); if (el2 && name) el2.textContent = name;
+  const sub = document.getElementById("hdSub");   // reveal code + visibility only once signed in
+  if (sub && name && window.GROUP) sub.innerHTML = "code <b>" + esc(GROUP.code) + "</b> · " + (GROUP.is_public ? "public" : "private");
+}
 
 async function authGate() {
   // Signed in -> full access. Signed out: a PUBLIC group is viewable read-only; a private

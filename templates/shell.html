@@ -10,8 +10,9 @@
 <body>
 <div class="app">
   <div class="hd">
-    <div class="name" onclick="openSwitcher()">🎾 <span id="hdName">{% if g.is_public %}{{ g.name }}{% else %}Rally{% endif %}</span> <span class="chev">▾</span></div>
-    <div class="sub" id="hdSub">{% if g.is_public %}code <b>{{ g.code }}</b> · public{% else %}tennis scorer{% endif %}</div>
+    {# Neutral header until the client confirms a signed-in session — no group name leaks before sign-in (Task 5). JS swaps in the group name via setHeaderName() once /api/me confirms. #}
+    <div class="name" onclick="openSwitcher()">🎾 <span id="hdName">Rally</span> <span class="chev">▾</span></div>
+    <div class="sub" id="hdSub">tennis scorer</div>
     <div class="court-line"></div>
   </div>
 

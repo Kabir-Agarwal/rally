@@ -105,6 +105,13 @@ def undo_tt_game(con, mid):
         con.commit()
 
 
+def _bump(con, mid):
+    """Invalidate the cached rating state for this match's group (Task 2)."""
+    m = db.match_row(con, mid)
+    if m:
+        db.bump_ratings(con, m["group_id"])
+
+
 # --- finish (v2: immediate, no approval gate) -----------------------------
 def finish_match(con, mid):
     """End a live match -> finished. Counts toward ratings IMMEDIATELY (no approvals)."""
@@ -113,6 +120,7 @@ def finish_match(con, mid):
         validate_sets([(s["games_side1"], s["games_side2"]) for s in db.match_sets(con, mid)])
     con.execute("UPDATE matches SET status='finished', finished_at=? WHERE id=?", (now(), mid))
     con.commit()
+    _bump(con, mid)
 
 
 # --- delete (v2: immediate soft-delete; admin can restore) ----------------
@@ -120,6 +128,7 @@ def delete_match(con, mid):
     """Soft-delete immediately (any member). Hidden everywhere + out of ratings at once."""
     if not db.match_row(con, mid):
         raise ValueError("no such match")
+    _bump(con, mid)
     db.set_deleted(con, mid, True)
     return "deleted"
 
@@ -137,6 +146,7 @@ def admin_delete_match(con, mid):
     """Admin soft-delete of any match (restorable)."""
     if not db.match_row(con, mid):
         raise ValueError("no such match")
+    _bump(con, mid)
     db.set_deleted(con, mid, True)
 
 
@@ -144,6 +154,7 @@ def admin_restore_match(con, mid):
     """Restore a soft-deleted match."""
     if not db.match_row(con, mid):
         raise ValueError("no such match")
+    _bump(con, mid)
     db.set_deleted(con, mid, False)
 
 
@@ -151,6 +162,7 @@ def admin_void_match(con, mid):
     """Void a match: kept and visible, but EXCLUDED from rating recompute-on-read."""
     if not db.match_row(con, mid):
         raise ValueError("no such match")
+    _bump(con, mid)
     db.set_voided(con, mid, True)
 
 
@@ -158,6 +170,7 @@ def admin_unvoid_match(con, mid):
     """Unvoid: the match counts toward ratings again."""
     if not db.match_row(con, mid):
         raise ValueError("no such match")
+    _bump(con, mid)
     db.set_voided(con, mid, False)
 
 
@@ -181,6 +194,7 @@ def admin_edit_match(con, mid, sets=None, played_on=None, kind=None):
     if played_on:
         con.execute("UPDATE matches SET played_on=? WHERE id=?", (played_on, mid))
     con.commit()
+    _bump(con, mid)
 
 
 if __name__ == "__main__":

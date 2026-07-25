@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS groups (
   name TEXT NOT NULL,
   code TEXT UNIQUE NOT NULL,
   is_public INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  ratings_rev INTEGER NOT NULL DEFAULT 0   -- bumped when a rating-affecting change happens
 );
 CREATE TABLE IF NOT EXISTS players (
   id INTEGER PRIMARY KEY,
@@ -229,9 +230,15 @@ def _migrate(con):
         con.commit()
     except Exception:
         pass
+    try:
+        con.execute("ALTER TABLE groups ADD COLUMN ratings_rev INTEGER NOT NULL DEFAULT 0")
+        con.commit()
+    except Exception:
+        pass
 
 
 def init_db(path=DB_PATH):
+    _RATING_CACHE.clear()   # fresh DB -> drop any cached ratings (keeps tests isolated)
     if _is_pg():
         import schema
         schema.metadata.create_all(_engine())
@@ -328,6 +335,7 @@ def delete_group(con, gid):
     con.execute("DELETE FROM players WHERE group_id=?", (gid,))
     con.execute("DELETE FROM groups WHERE id=?", (gid,))
     con.commit()
+    _RATING_CACHE.pop(gid, None)
 
 
 def rename_player(con, pid, name=None, real_name=None):
@@ -350,9 +358,12 @@ def rename_player(con, pid, name=None, real_name=None):
 
 def delete_player(con, pid):
     """Delete a player and cascade the matches they played (their group only)."""
+    row = con.execute("SELECT group_id FROM players WHERE id=?", (pid,)).fetchone()
     _delete_matches(con, _match_ids_of_player(con, pid))
     con.execute("DELETE FROM players WHERE id=?", (pid,))
     con.commit()
+    if row:
+        bump_ratings(con, row["group_id"])
 
 
 def player_row(con, pid):
@@ -494,15 +505,46 @@ def _match_to_dict(con, m):
     return d
 
 
-def rating_state(con, group_id):
-    """Rebuild rating state from FINISHED, non-voided, non-deleted matches in finish order.
-    Results count immediately on finish (v2: no approval gate); voided/deleted are excluded."""
+def _rebuild_rating_state(con, group_id):
     ms = con.execute(
         "SELECT * FROM matches WHERE group_id=? AND status='finished' AND voided=0 AND deleted=0 "
         "ORDER BY COALESCE(finished_at, created_at), id",
         (group_id,),
     ).fetchall()
     return ratings.rebuild([_match_to_dict(con, m) for m in ms])
+
+
+# In-process rating cache keyed by group_id, validated by groups.ratings_rev (Task 2).
+# ponytail: process-local dict — perfect for one worker; a shared cache (redis) is the scale
+# upgrade if multiple workers ever need to share it. Correctness is guaranteed by the rev
+# check: a stale rev forces a rebuild. Callers only READ the returned state (no mutation).
+_RATING_CACHE = {}
+
+
+def ratings_rev(con, group_id):
+    r = con.execute("SELECT ratings_rev FROM groups WHERE id=?", (group_id,)).fetchone()
+    return r["ratings_rev"] if r else 0
+
+
+def bump_ratings(con, group_id):
+    """Call on every rating-affecting change so the cache invalidates."""
+    con.execute("UPDATE groups SET ratings_rev = ratings_rev + 1 WHERE id=?", (group_id,))
+    con.commit()
+
+
+def rating_state(con, group_id, use_cache=True):
+    """Cached rating state (FINISHED, non-voided, non-deleted). Recomputed only when the
+    group's ratings_rev changed since the cache was built — Ranks/Live no longer walk the
+    whole match history on every read."""
+    if not use_cache:
+        return _rebuild_rating_state(con, group_id)
+    rev = ratings_rev(con, group_id)
+    hit = _RATING_CACHE.get(group_id)
+    if hit and hit[0] == rev:
+        return hit[1]
+    state = _rebuild_rating_state(con, group_id)
+    _RATING_CACHE[group_id] = (rev, state)
+    return state
 
 
 # --- v2 match flags (immediate results; admin void/restore) ---------------

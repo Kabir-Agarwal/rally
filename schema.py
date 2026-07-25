@@ -19,6 +19,7 @@ groups = Table(
     Column("code", Text, nullable=False, unique=True),
     Column("is_public", Integer, nullable=False, server_default="0"),
     Column("created_at", Text, nullable=False),
+    Column("ratings_rev", Integer, nullable=False, server_default="0"),
 )
 
 players = Table(

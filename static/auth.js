@@ -5,27 +5,60 @@
      OAuth redirect (opens the Google account chooser); the server verifies the returned token.
    - No keys: falls back silently to a local mock so the app keeps working. */
 window.Auth = (function () {
-  var TOK = "rally_token", EM = "rally_email";
+  var TOK = "rally_token", EM = "rally_email", RT = "rally_refresh", LR = "rally_oauth_return";
 
-  function token() { return localStorage.getItem(TOK) || ""; }
-  function email() { return localStorage.getItem(EM) || ""; }
+  function safeGet(store, k) { try { return store.getItem(k); } catch (e) { return null; } }
+  function safeSet(store, k, v) { try { store.setItem(k, v); } catch (e) { } }
+  function safeDel(store, k) { try { store.removeItem(k); } catch (e) { } }
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]); }); }
+
+  function token() { return safeGet(localStorage, TOK) || ""; }
+  function email() { return safeGet(localStorage, EM) || ""; }
+  function refreshToken() { return safeGet(localStorage, RT) || ""; }
   function signedIn() { return !!token(); }
   function headers() { return signedIn() ? { "Authorization": "Bearer " + token() } : {}; }
-  function set(t, e) { localStorage.setItem(TOK, t); if (e) localStorage.setItem(EM, e); }
-  function signOut() { localStorage.removeItem(TOK); localStorage.removeItem(EM); }
+  function set(t, e, rt) { safeSet(localStorage, TOK, t); if (e) safeSet(localStorage, EM, e); if (rt) safeSet(localStorage, RT, rt); }
+  function signOut() { safeDel(localStorage, TOK); safeDel(localStorage, EM); safeDel(localStorage, RT); }
 
-  // On return from a Supabase OAuth redirect the token arrives in the URL hash. Capture it.
+  // --- sign-in outcome: never swallowed. Recorded here + persisted across the reload. -----
+  var _lastReturn = null;
+  function recordReturn(obj) { _lastReturn = obj; safeSet(sessionStorage, LR, JSON.stringify(obj)); }
+  function lastReturn() {
+    if (_lastReturn) return _lastReturn;
+    var s = safeGet(sessionStorage, LR);
+    if (s) { try { _lastReturn = JSON.parse(s); } catch (e) { } }
+    return _lastReturn;
+  }
+  function clearLastReturn() { _lastReturn = null; safeDel(sessionStorage, LR); }
+
+  // On return from a Supabase OAuth redirect the outcome is in the hash OR the query. Inspect
+  // BOTH; record whatever came back (token, error, PKCE code, or nothing) — never swallow it.
   (function captureOAuthReturn() {
-    var h = window.location.hash || "";
-    if (h.indexOf("access_token=") >= 0) {
-      var p = new URLSearchParams(h.slice(1));
-      var t = p.get("access_token");
-      if (t) {
-        localStorage.setItem(TOK, t);
-        try { history.replaceState(null, "", window.location.pathname + window.location.search); } catch (e) { }
-        refreshEmail();   // best-effort: fill the display email from the verified token
-      }
+    var hash = (window.location.hash || "").replace(/^#/, "");
+    var query = (window.location.search || "").replace(/^\?/, "");
+    var hp = new URLSearchParams(hash), qp = new URLSearchParams(query);
+    var g = function (k) { return hp.get(k) || qp.get(k); };
+    var token = g("access_token"), err = g("error") || g("error_code"),
+      errDesc = g("error_description"), code = g("code");
+    var hashHasParams = hash.length > 0 && hash.indexOf("=") >= 0;
+    function strip() { try { history.replaceState(null, "", window.location.pathname); } catch (e) { } }
+
+    if (token) {
+      set(token, "", g("refresh_token"));        // keep the refresh token for renewal (Task 3)
+      recordReturn({ ok: true });
+      strip();
+      refreshEmail();
+    } else if (err || errDesc) {
+      recordReturn({ ok: false, error: err || "error", description: errDesc || "" });
+      strip();
+    } else if (code) {                           // Supabase PKCE code flow — we only handle implicit
+      recordReturn({ ok: false, error: "code_flow", description: "Supabase returned a code, not a token" });
+      strip();
+    } else if (hashHasParams) {                  // came back from a redirect with neither token nor error
+      recordReturn({ ok: false, error: "empty", description: "came back from Google with no token and no error" });
+      strip();
     }
+    // no hash/error/code at all => ordinary page load => record nothing
   })();
 
   var _cfg = null;
@@ -86,12 +119,22 @@ window.Auth = (function () {
       inner + '<div class="err" id="auErr"></div></div>';
   };
 
+  // A small muted line showing why a previous sign-in attempt failed (never swallowed).
+  function failLine() {
+    var lr = lastReturn();
+    if (!lr || lr.ok !== false) return "";
+    var msg = lr.message || ("Sign-in failed: " + (lr.error || "") + (lr.description ? " — " + lr.description : ""));
+    clearLastReturn();                                   // show once, don't persist forever
+    return '<div class="muted" style="text-align:center;margin:0 0 10px;color:#c0392b">' + esc(msg.slice(0, 200)) + '</div>';
+  }
+
   async function renderSignIn(host, onDone) {
     host.innerHTML = SHELL('<div class="muted" style="text-align:center">…</div>');
+    var fl = failLine();
     var cfg = await config();
     if (cfg.mode !== "supabase") {
       // FALLBACK: a single Continue button. No Google, no email, no code — ever.
-      host.innerHTML = SHELL('<button class="btn" id="auGo">Continue</button>');
+      host.innerHTML = SHELL(fl + '<button class="btn" id="auGo">Continue</button>');
       var err = host.querySelector("#auErr");
       host.querySelector("#auGo").onclick = async function () {
         err.textContent = "";
@@ -100,7 +143,7 @@ window.Auth = (function () {
       return;
     }
     // REAL: Google + email OTP. The OTP code is typed by the user and never shown on screen.
-    host.innerHTML = SHELL(
+    host.innerHTML = SHELL(fl +
       '<button class="btn" id="auGoogle">Continue with Google</button>' +
       '<div class="muted" style="text-align:center;margin:12px 0 6px">or</div>' +
       '<div id="auEmailBox"><input id="auEmail" type="email" placeholder="you@email.com" autocomplete="email">' +

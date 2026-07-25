@@ -116,6 +116,22 @@ SQLite file `tennis.db` is created on first run (gitignored).
   live here — the smoke test `test_db_backend.py` compiles the schema for the Postgres dialect
   (no live PG), and asserts the metadata matches the SQLite SCHEMA.
 
+## Speed/UI revamp (in progress — read docs/mockup-v9.jsx, the owner-approved reference)
+- **Task 0 (done):** `docs/mockup-v9.jsx` (51,461 bytes) committed as the permanent UI reference.
+- **Task 1 (done): SPA shell.** All `/g/<code>/<tab>` + `/player/<id>` routes serve ONE
+  `templates/shell.html`; the JS router (`app.js`) switches tabs client-side (keep-all-panels
+  model, unique ids per tab), `history.pushState` for shareable URLs, `popstate` back button.
+  Measured tab switch 1–10ms, no page reload. Pollers are per-active-tab (`clearPollers`).
+  Old per-tab templates (live/leaderboard/log/groups/history/player.html) are now DEAD (shell
+  replaces them) — left in the repo, safe to delete later.
+- **Task 4 (done): player overlay.** Tapping a rank row → `openPlayer(id)` fetches
+  `GET /g/<code>/api/player/<id>` and renders PlayerStats as an in-app overlay (back button +
+  URL). Never self-vs-self. (Was broken because the old route/build; now an overlay.)
+- **Task 5 (done): FunnelDrawer.** Right-side drawer (Mode/Kind + Who checkboxes + Apply) on
+  Ranks and History; filters change the list; History `scope=everyone` aggregates public groups.
+- **Still to do this session:** Task 2 (cache ratings), Task 3 (cold start), Task 6 (one live
+  match/player enforced server-side), Task 7 (full UI reconciliation vs mockup), Task 8 (QA).
+
 ## V2 status: COMPLETE + names/sign-in revamp (Tasks 0–8, onboarding, names+sign-in)
 All built, tested, committed. 73 Python + 2 Node tests green. Deploy needs env vars
 `DATABASE_URL`, `ADMIN_KEY`, and (for real sign-in) `SUPABASE_URL` + `SUPABASE_ANON_KEY`.

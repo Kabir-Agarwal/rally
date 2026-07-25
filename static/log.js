@@ -15,8 +15,14 @@ function slotDefs(kind) {
 }
 function needSlots(kind) { return kind === "singles" ? 2 : kind === "doubles" ? 4 : 3; }
 
-async function initLog() {
+let LOG_BUILT = false;
+async function initLog(isRefresh) {
   await refreshMeta();
+  if (LOG_BUILT && isRefresh) {          // tab re-entry: refresh without wiping picker/editor state
+    renderCourt(); loadEditor(); poll(loadEditor, 4000);
+    return;
+  }
+  LOG_BUILT = true;
   document.getElementById("logRoot").innerHTML =
     '<div class="sec-title">Start a live match</div>' +
     '<div class="card">' +
@@ -34,7 +40,7 @@ async function initLog() {
   setKind(NEW.kind);
   buildPlayed();
   loadEditor();
-  setInterval(loadEditor, 4000);
+  poll(loadEditor, 4000);   // tracked poller — cleared when leaving the Log tab
 }
 async function refreshMeta() {
   const meta = await api(`/g/${GROUP.code}/api/meta`);

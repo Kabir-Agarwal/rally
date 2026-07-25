@@ -233,3 +233,25 @@ input,select{font:inherit;padding:11px 12px;border:1.5px solid var(--line);borde
 .bname{display:flex;align-items:center;gap:4px}
 .ttcell{display:flex;align-items:center;gap:6px}
 .ttwins{font-size:15px}
+
+/* ---------- SPA panels + funnel drawer ---------- */
+.panel{min-height:10px}
+.funnelbtn{width:44px;height:44px;flex:0 0 auto;border-radius:12px;border:1.5px solid var(--line);
+  background:#fff;color:var(--clay);font-size:16px;font-weight:900;cursor:pointer}
+.scopeline{margin:6px 16px 0;font-size:12px;color:var(--muted)}
+.scopeinline{color:var(--muted);font-weight:600;text-transform:none;font-size:12px}
+.drawerwrap{position:fixed;inset:0;z-index:60}
+.drawerbg{position:absolute;inset:0;background:rgba(43,33,28,.45)}
+.drawer{position:absolute;top:0;bottom:0;right:0;width:74%;max-width:300px;background:var(--cream);
+  border-left:1px solid var(--line);padding:16px;display:flex;flex-direction:column;gap:14px;
+  animation:slideIn .2s ease}
+@keyframes slideIn{from{transform:translateX(105%)}to{transform:translateX(0)}}
+.fg .fglab{font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);
+  margin-bottom:8px;font-weight:800}
+.fcheck{display:flex;align-items:center;gap:10px;background:transparent;border:none;cursor:pointer;
+  padding:6px 0;color:var(--muted);font:inherit;font-size:14px;font-weight:700;width:100%;text-align:left}
+.fcheck.on{color:var(--ink)}
+.fcheck .fbox{width:20px;height:20px;border-radius:5px;flex-shrink:0;border:2px solid var(--line);
+  background:#fff;color:#fff;font-size:13px;line-height:17px;text-align:center;font-weight:900}
+.fcheck.on .fbox{border-color:var(--clay);background:var(--clay)}
+.fg{display:flex;flex-direction:column}

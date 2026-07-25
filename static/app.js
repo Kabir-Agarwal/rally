@@ -157,8 +157,10 @@ async function openSwitcher() {
 }
 function closeSwitcher() { const s = document.getElementById("switcher"); if (s) s.classList.remove("open"); }
 
-// ---------- polling ----------
-function poll(fn, ms) { fn(); return setInterval(() => { if (!document.hidden) fn(); }, ms || 3000); }
+// ---------- polling (per-active-tab; cleared on tab switch) ----------
+let POLLERS = [];
+function poll(fn, ms) { fn(); const id = setInterval(() => { if (!document.hidden) fn(); }, ms || 3000); POLLERS.push(id); return id; }
+function clearPollers() { POLLERS.forEach(clearInterval); POLLERS = []; }
 
 // ---------- rating display (0-based) ----------
 const disp = (elo0based) => (elo0based > 0 ? "+" : "") + elo0based;   // meta already 0-based
@@ -231,7 +233,7 @@ function rankRow(r, mePid) {
   const dot = r.live ? '<span class="dot pulse"></span>' : '<span class="dotspace"></span>';
   const tag = r.group ? `<span class="tag">${esc(r.group)}</span>` : "";
   const rating = dispFromEloRow(r);
-  return `<div class="lbrow ${you ? 'you' : ''}" onclick="location.href='/g/${GROUP.code}/player/${r.id}'">
+  return `<div class="lbrow ${you ? 'you' : ''}" onclick="openPlayer(${r.id})">
     <div class="rk">${r.rank || '–'}</div>${av(r.name)}
     <div class="nm">${dot}${pBlock(r)}${tag}${you ? ' <span class="youpill">YOU</span>' : ''}<div class="tapstats">tap for stats</div></div>
     <div class="rt">${rating}</div></div>`;
@@ -239,13 +241,15 @@ function rankRow(r, mePid) {
 const dispFromEloRow = (r) => { const v = r.rating - 1200; return (v > 0 ? "+" : "") + v; };
 function renderRanks() {
   if (!RANK.data) return;
+  const sl = document.getElementById("rankScopeLine");
+  if (sl) sl.textContent = (RANK.mode === "doubles" ? "Doubles" : "Singles") + " · " + scopeLabel(RANK.scope);
   const q = (document.getElementById("rankSearch").value || "").toLowerCase();
   const filt = a => a.filter(r => r.name.toLowerCase().includes(q));
   const ranked = filt(RANK.data.ranked), prov = filt(RANK.data.provisional);
   const yc = document.getElementById("youCard"); yc.innerHTML = "";
   if (ME.player_id && RANK.scope === "group") {
     const you = RANK.data.ranked.find(r => r.id == ME.player_id);
-    if (you) yc.appendChild(el(`<div class="youcard" onclick="location.href='/g/${GROUP.code}/player/${you.id}'">${av(you.name)}
+    if (you) yc.appendChild(el(`<div class="youcard" onclick="openPlayer(${you.id})">${av(you.name)}
       <div style="flex:1">${pBlock(you)} <span class="youpill">YOU</span></div>
       <div>#${you.rank} · <b>${dispFromEloRow(you)}</b></div></div>`));
   }
@@ -253,12 +257,51 @@ function renderRanks() {
   const provWrap = document.getElementById("provWrap");
   provWrap.innerHTML = prov.length
     ? `<div class="sec-title">Minimum 5 matches</div><div class="card" style="padding:2px 2px">` +
-      prov.map(r => `<div class="lbrow" onclick="location.href='/g/${GROUP.code}/player/${r.id}'"><div class="rk">–</div>${av(r.name)}
+      prov.map(r => `<div class="lbrow" onclick="openPlayer(${r.id})"><div class="rk">–</div>${av(r.name)}
         <div class="nm">${r.live ? '<span class="dot pulse"></span>' : '<span class="dotspace"></span>'}${pBlock(r)}${r.group ? `<span class="tag">${esc(r.group)}</span>` : ''}</div>
         <div class="rt">${dispFromEloRow(r)} <span class="pill">${r.n} of 5</span></div></div>`).join("") + `</div>`
     : "";
 }
 function initRanks() { loadRanks(); poll(async () => { await loadRanks(); }, 5000); }
+
+// ---------- funnel drawer (Ranks + History filters) ----------
+const HIST_KIND_LABELS = { all: "All", singles: "Singles", doubles: "Doubles", tt: "Triple threat" };
+const HIST_KIND_FROM = { "All": "all", "Singles": "singles", "Doubles": "doubles", "Triple threat": "tt" };
+function scopeLabel(s) { return s === "everyone" ? "Everyone" : "This group"; }
+function openFunnel(which) {
+  const isR = which === "ranks";
+  const modes = isR ? ["Singles", "Doubles"] : ["All", "Singles", "Doubles", "Triple threat"];
+  const curMode = isR ? (RANK.mode === "doubles" ? "Doubles" : "Singles")
+    : HIST_KIND_LABELS[HIST.kind];
+  const curScope = scopeLabel(isR ? RANK.scope : HIST.scope);
+  let mSel = curMode, sSel = curScope;
+  const ov = el(`<div class="drawerwrap open">
+    <div class="drawerbg" onclick="closeFunnel()"></div>
+    <div class="drawer">
+      <div style="font-weight:800;font-size:15px">Filters</div>
+      <div class="fg"><div class="fglab">${isR ? "Mode" : "Kind"}</div><div id="fMode"></div></div>
+      <div class="fg"><div class="fglab">Who</div><div id="fScope"></div></div>
+      <button class="btn" id="fApply" style="margin-top:auto">Apply</button>
+    </div></div>`);
+  document.body.appendChild(ov);
+  const fc = (host, opts, get, set) => {
+    host.innerHTML = "";
+    opts.forEach(o => {
+      const b = el(`<button class="fcheck ${get() === o ? 'on' : ''}"><span class="fbox">${get() === o ? '✓' : ''}</span>${esc(o)}</button>`);
+      b.onclick = () => { set(o); host.querySelectorAll(".fcheck").forEach(x => { x.classList.remove("on"); x.querySelector(".fbox").textContent = ""; }); b.classList.add("on"); b.querySelector(".fbox").textContent = "✓"; };
+      host.appendChild(b);
+    });
+  };
+  fc(ov.querySelector("#fMode"), modes, () => mSel, v => mSel = v);
+  fc(ov.querySelector("#fScope"), ["This group", "Everyone"], () => sSel, v => sSel = v);
+  ov.querySelector("#fApply").onclick = () => {
+    const scope = sSel === "Everyone" ? "everyone" : "group";
+    if (isR) { RANK.mode = mSel === "Doubles" ? "doubles" : "singles"; RANK.scope = scope; loadRanks(); }
+    else { HIST.kind = HIST_KIND_FROM[mSel]; HIST.scope = scope; loadHistory(); }
+    closeFunnel();
+  };
+}
+function closeFunnel() { const d = document.querySelector(".drawerwrap"); if (d) d.remove(); }
 
 // ================= GROUPS =================
 function renderAccount() {
@@ -300,6 +343,7 @@ async function saveName() {
   } catch (e) { err.textContent = e; }
 }
 async function initGroups() {
+  const cb = document.getElementById("grpCodeBig"); if (cb) cb.textContent = GROUP.code;
   renderAccount();
   renderGroupRows();
 }
@@ -346,7 +390,9 @@ async function joinGroup() {
 let HIST = { kind: "all", scope: "group" };
 function setHistOpt(kind, val, btn) { btn.parentElement.querySelectorAll("button").forEach(b => b.classList.remove("on")); btn.classList.add("on"); HIST[kind] = val; loadHistory(); }
 async function loadHistory() {
-  const d = await api(`/g/${GROUP.code}/api/history`);
+  const sl = document.getElementById("histScopeLine");
+  if (sl) sl.textContent = "· " + HIST_KIND_LABELS[HIST.kind] + " · " + scopeLabel(HIST.scope);
+  const d = await api(`/g/${GROUP.code}/api/history?scope=${HIST.scope}`);
   const host = document.getElementById("historyList"); host.innerHTML = "";
   let matches = d.matches;
   if (HIST.kind !== "all") matches = matches.filter(m => m.kind === HIST.kind);
@@ -396,13 +442,53 @@ function storyLine(s) {
 }
 function initHistory() { loadHistory(); }
 
-// ================= PLAYER =================
-function initPlayer() {
-  const host = document.getElementById("pmHist"); if (!host) return;
-  if (ME.player_id == PLAYER.id) { const b = document.getElementById("youBadge"); if (b) b.innerHTML = '<span class="youpill">YOU</span>'; }
-  if (!PLAYER.matches.length) { host.innerHTML = '<div class="empty">No matches yet.</div>'; return; }
-  host.innerHTML = "";
-  PLAYER.matches.forEach(m => host.appendChild(historyCardStatic(m)));
+// ================= PLAYER (in-app overlay) =================
+let PLAYER_OPEN = false;
+async function openPlayer(pid) {
+  const ov = document.getElementById("playerOverlay");
+  PLAYER_OPEN = true;
+  ov.style.display = "block";
+  ov.innerHTML = `<div class="card"><div class="empty">Loading…</div></div>`;
+  history.pushState({ player: pid }, "", `/g/${GROUP.code}/player/${pid}`);
+  try {
+    const p = await api(`/g/${GROUP.code}/api/player/${pid}`);
+    renderPlayer(ov, p);
+  } catch (e) { ov.innerHTML = `<div class="card"><div class="empty">Could not load player.</div><button class="btn ghost sm" onclick="closePlayer()">← Back</button></div>`; }
+}
+function closePlayer(silent) {
+  const ov = document.getElementById("playerOverlay");
+  if (ov) { ov.style.display = "none"; ov.innerHTML = ""; }
+  PLAYER_OPEN = false;
+  if (!silent) { if (history.state && history.state.player) history.back(); }
+}
+function renderPlayer(ov, p) {
+  const you = ME && ME.player_id === p.id;
+  const l5 = (p.last5 || []).map(r => `<b style="color:${r === 'W' ? 'var(--live)' : '#c0392b'}">${r}</b>`).join(" ");
+  const pairs = (p.pairs || []).map(pr =>
+    `<div class="lbrow" style="cursor:default"><div class="nm">with ${esc(pr.partner)}</div>
+      <div class="rt">${pr.rating - 1200 >= 0 ? '+' : ''}${pr.rating - 1200}</div>${pr.provisional ? `<span class="pill">${pr.n}/3</span>` : ''}</div>`).join("");
+  const serve = p.serve || {};
+  const serveCard = serve.live_matches
+    ? `<div class="row"><div class="setcol"><div class="muted">Hold %</div><div style="font-size:20px;font-weight:900">${serve.hold_pct == null ? '—' : serve.hold_pct}</div></div>
+        <div class="setcol"><div class="muted">Break %</div><div style="font-size:20px;font-weight:900">${serve.break_pct == null ? '—' : serve.break_pct}</div></div></div>
+        <div class="note">from ${serve.live_matches} live-scored match(es) · return stats team-level for doubles</div>`
+    : `<div class="muted">No live-scored matches yet.</div>`;
+  const matches = (p.matches || []).length
+    ? p.matches.map(m => historyCardStatic(m).outerHTML).join("")
+    : `<div class="empty">No matches yet.</div>`;
+  ov.innerHTML = `
+    <div style="margin:12px 16px 0"><button class="btn ghost sm" onclick="closePlayer()">← Back</button></div>
+    <div class="card"><div class="side" style="font-size:18px;align-items:flex-start">
+      ${av(p.name).replace('avatar"', 'avatar" style="width:34px;height:34px;font-size:15px"')}
+      <div class="pn"><div class="pn-game" style="font-size:20px">${esc(p.name)}${p.live ? '<span class="dot pulse"></span>' : ''}${you ? ' <span class="youpill">YOU</span>' : ''}</div>
+        ${p.real_name ? `<div class="pn-real">${esc(p.real_name)}</div>` : ''}</div></div>
+      <div class="muted" style="margin-top:6px">${p.wins}W · ${p.losses}L · last 5: ${l5 || '—'}</div>
+      <div class="row" style="margin-top:10px">
+        <div class="setcol"><div class="muted">Singles</div><div style="font-size:22px;font-weight:900">${p.singles - 1200 >= 0 ? '+' : ''}${p.singles - 1200}</div>${p.singles_prov ? `<span class="pill">${p.singles_n} of 5</span>` : ''}</div>
+        <div class="setcol"><div class="muted">Doubles</div><div style="font-size:22px;font-weight:900">${p.doubles - 1200 >= 0 ? '+' : ''}${p.doubles - 1200}</div>${p.doubles_prov ? `<span class="pill">${p.doubles_n} of 5</span>` : ''}</div></div></div>
+    ${pairs ? `<div class="sec-title">Pair ratings</div><div class="card" style="padding:6px 12px">${pairs}</div>` : ''}
+    <div class="sec-title">Serve &amp; return</div><div class="card">${serveCard}</div>
+    <div class="sec-title">Matches</div><div class="card" style="padding:6px 12px">${matches}</div>`;
 }
 function historyCardStatic(m) {
   const when = esc((m.played_on || "").replace("T", " "));
@@ -413,26 +499,100 @@ function historyCardStatic(m) {
   return el(`<div class="match"><div class="mtitle">${title}</div>${sets}<div class="note">${m.kind.toUpperCase()} · ${when}</div></div>`);
 }
 
+// ================= SPA ROUTER =================
+const TAB_SKELETONS = {
+  live: `<div class="sec-title">Live now</div><div id="liveMatches"><div class="empty">Loading…</div></div><div id="publicWrap"></div>`,
+  leaderboard: `<div class="row" style="margin:12px 16px 0">
+      <input id="rankSearch" placeholder="Search players…" oninput="renderRanks()">
+      <button class="funnelbtn" onclick="openFunnel('ranks')">▼</button></div>
+    <div id="rankScopeLine" class="scopeline"></div>
+    <div id="youCard"></div>
+    <div id="rankList" class="card" style="padding:2px 2px"><div class="empty">Loading…</div></div>
+    <div id="provWrap"></div>`,
+  log: `<div id="logRoot"><div class="empty">Loading…</div></div>`,
+  groups: `<div class="sec-title">Account</div><div class="card" id="accountCard"></div>
+    <div class="card"><div style="font-weight:800">This group</div><div class="bignum" id="grpCodeBig"></div>
+      <div class="note">Anyone with this code can watch. Signed-in members can score.</div></div>
+    <div class="sec-title">Your groups</div><div id="groupRows" class="card" style="padding:6px 6px"></div>
+    <div class="card"><div style="font-weight:800;margin-bottom:6px">+ Create a group</div>
+      <div class="row"><input id="newGroupName" placeholder="group name"><button class="btn sm" onclick="createGroup()">Create</button></div>
+      <div id="createOut" class="note"></div>
+      <div id="codeShareBox" style="display:none"><div class="muted" style="margin-top:6px">Share this code:</div><div class="bignum" id="codeShare"></div></div>
+      <div style="font-weight:800;margin:12px 0 6px">+ Join another group</div>
+      <div class="row"><input id="joinCode2" maxlength="6" placeholder="code" style="text-transform:uppercase"><button class="btn sm clay" onclick="joinGroup()">Join</button></div>
+      <div id="joinOut2" class="err"></div></div>`,
+  history: `<div class="row" style="margin:12px 16px 0">
+      <div class="sec-title" style="margin:0;flex:1">History <span id="histScopeLine" class="scopeinline"></span></div>
+      <button class="funnelbtn" onclick="openFunnel('hist')">▼</button></div>
+    <div id="historyList"><div class="empty">Loading…</div></div>`,
+};
+const TAB_INIT = { live: initLive, leaderboard: initRanks, log: initLog, groups: initGroups, history: initHistory };
+const TAB_URL = { live: "live", leaderboard: "leaderboard", log: "log", groups: "groups", history: "history" };
+const PANELS = {};
+let CURRENT_TAB = null;
+
+function setActiveNav(tab) {
+  document.querySelectorAll("#tabBar button").forEach(b => b.classList.toggle("on", b.dataset.tab === tab));
+}
+function panelFor(tab) {
+  if (PANELS[tab]) return PANELS[tab];
+  const box = document.createElement("div");
+  box.className = "panel";
+  if (window.READONLY && tab === "log") {
+    box.innerHTML = `<div class="card" style="text-align:center"><div style="font-weight:800">Sign in to score</div>
+      <div class="muted" style="margin:6px 0 10px">Scoring, starting matches and joining are for signed-in players.</div>
+      <button class="btn" onclick="showSignInGate()">Sign in</button></div>`;
+    PANELS[tab] = { el: box, inited: true, gate: true };
+  } else {
+    box.innerHTML = TAB_SKELETONS[tab];
+    PANELS[tab] = { el: box, inited: false };
+  }
+  document.getElementById("tabContent").appendChild(box);
+  return PANELS[tab];
+}
+function renderTab(tab) {
+  clearPollers();
+  closePlayer(true);
+  const p = panelFor(tab);
+  Object.keys(PANELS).forEach(k => PANELS[k].el.style.display = (k === tab ? "" : "none"));
+  setActiveNav(tab);
+  CURRENT_TAB = tab;
+  if (!p.gate && TAB_INIT[tab]) TAB_INIT[tab](p.inited);   // pass whether this is a refresh
+  p.inited = true;
+}
+function switchTab(tab) {
+  if (tab === CURRENT_TAB && !PLAYER_OPEN) return;
+  history.pushState({ tab }, "", `/g/${GROUP.code}/${TAB_URL[tab]}`);
+  renderTab(tab);
+}
+function routeFromPath() {
+  const parts = location.pathname.split("/");            // /g/<code>/<tab>[/player/<id>] ...
+  const i = parts.indexOf("player");
+  if (i >= 0 && parts[i + 1]) { renderTab(CURRENT_TAB || "leaderboard"); openPlayerNoPush(+parts[i + 1]); return; }
+  const seg = parts[3] || "live";
+  const tab = TAB_URL[seg] ? seg : "live";
+  renderTab(tab);
+}
+async function openPlayerNoPush(pid) {   // for popstate/deep-link: render without pushing state
+  const ov = document.getElementById("playerOverlay");
+  PLAYER_OPEN = true; ov.style.display = "block"; ov.innerHTML = `<div class="card"><div class="empty">Loading…</div></div>`;
+  try { renderPlayer(ov, await api(`/g/${GROUP.code}/api/player/${pid}`)); } catch (e) { ov.innerHTML = `<div class="card"><div class="empty">Could not load player.</div></div>`; }
+}
+window.addEventListener("popstate", () => {
+  if (PLAYER_OPEN && !(history.state && history.state.player)) { closePlayer(true); return; }
+  routeFromPath();
+});
+
 // ---------- boot ----------
 document.addEventListener("DOMContentLoaded", async () => {
-  const page = window.PAGE;
-  if (page === "landing") { return initLanding(); }
+  if (window.PAGE === "landing") { return initLanding(); }
   if (!GROUP) return;
   if (!(await authGate())) return;         // shows sign-in (private) or read-only (public)
   if (!window.READONLY) { try { await ensureIdentity(); } catch (e) { } }
-  if (window.READONLY && page === "log") {
-    document.getElementById("logRoot").innerHTML =
-      `<div class="card" style="text-align:center"><div style="font-weight:800">Sign in to score</div>
-       <div class="muted" style="margin:6px 0 10px">Scoring, starting matches and joining are for signed-in players.</div>
-       <button class="btn" onclick="showSignInGate()">Sign in</button></div>`;
-    return;
-  }
-  if (page === "live") initLive();
-  else if (page === "leaderboard") initRanks();
-  else if (page === "log") initLog();
-  else if (page === "groups") initGroups();
-  else if (page === "history") initHistory();
-  else if (page === "player") initPlayer();
+  const initTab = (window.INIT && TAB_URL[window.INIT.tab]) ? window.INIT.tab : "live";
+  renderTab(initTab);
+  setActiveNav(initTab);
+  if (window.INIT && window.INIT.player) openPlayerNoPush(window.INIT.player);
 });
 
 // ---------- landing ----------

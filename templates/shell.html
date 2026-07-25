@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#A94E2F">
+<title>Rally</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="app">
+  <div class="hd">
+    <div class="name" onclick="openSwitcher()">🎾 <span id="hdName">{% if g.is_public %}{{ g.name }}{% else %}Rally{% endif %}</span> <span class="chev">▾</span></div>
+    <div class="sub" id="hdSub">{% if g.is_public %}code <b>{{ g.code }}</b> · public{% else %}tennis scorer{% endif %}</div>
+    <div class="court-line"></div>
+  </div>
+
+  <div id="tabContent"></div>
+  <div id="playerOverlay"></div>
+
+  <div class="switcher" id="switcher" onclick="if(event.target.id=='switcher')closeSwitcher()">
+    <div class="sheet2">
+      <div style="font-weight:800;margin:4px 0 8px">Your groups</div>
+      <div id="switcherList" class="muted">…</div>
+    </div>
+  </div>
+  <nav class="tabs" id="tabBar">
+    <button data-tab="live"        onclick="switchTab('live')"><span class="ic">🎾</span>Live</button>
+    <button data-tab="leaderboard" onclick="switchTab('leaderboard')"><span class="ic">🏆</span>Ranks</button>
+    <button data-tab="log"         onclick="switchTab('log')"><span class="ic">✏️</span>Log</button>
+    <button data-tab="groups"      onclick="switchTab('groups')"><span class="ic">👥</span>Groups</button>
+    <button data-tab="history"     onclick="switchTab('history')"><span class="ic">📜</span>History</button>
+  </nav>
+  <script>
+    window.GROUP={code:"{{ g.code }}",name:"{% if g.is_public %}{{ g.name|e }}{% endif %}",is_public:{{ 'true' if g.is_public else 'false' }}};
+    window.INIT={tab:"{{ tab }}",player:{{ player if player else 'null' }}};
+    window.PAGE="spa";
+  </script>
+</div>
+<script src="/static/auth.js"></script>
+<script src="/static/engine.js"></script>
+<script src="/static/sync.js"></script>
+<script src="/static/log.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -318,15 +318,13 @@ async def api_join_group(request: Request):
     return {"code": g["code"], "name": g["name"]}
 
 
-# --- tab pages ------------------------------------------------------------
-def _page(request, code, tab, extra=None):
+# --- SPA shell (one page; the JS router switches tabs client-side, no reload) --------
+def _shell(request, code, tab, player=None):
     con = get_con()
     g = require_group(con, code)
-    ctx = {"request": request, "g": dict(g), "tab": tab, "code": code}
-    if extra:
-        ctx.update(extra(con, g))
     con.close()
-    return templates.TemplateResponse(request, f"{tab}.html", ctx)
+    return templates.TemplateResponse(request, "shell.html",
+                                      {"g": dict(g), "code": code, "tab": tab, "player": player})
 
 
 @app.get("/g/{code}", response_class=HTMLResponse)
@@ -336,46 +334,46 @@ def group_home(code: str):
 
 @app.get("/g/{code}/live", response_class=HTMLResponse)
 def page_live(request: Request, code: str):
-    return _page(request, code, "live")
+    return _shell(request, code, "live")
 
 
 @app.get("/g/{code}/leaderboard", response_class=HTMLResponse)
 def page_leaderboard(request: Request, code: str):
-    return _page(request, code, "leaderboard")
+    return _shell(request, code, "leaderboard")
 
 
 @app.get("/g/{code}/log", response_class=HTMLResponse)
 def page_log(request: Request, code: str):
-    def extra(con, g):
-        return {"players": [dict(p) for p in db.players_of(con, g["id"])]}
-    return _page(request, code, "log", extra)
+    return _shell(request, code, "log")
 
 
 @app.get("/g/{code}/groups", response_class=HTMLResponse)
 def page_groups(request: Request, code: str):
-    def extra(con, g):
-        return {"players": [dict(p) for p in db.players_of(con, g["id"])]}
-    return _page(request, code, "groups", extra)
+    return _shell(request, code, "groups")
 
 
 @app.get("/g/{code}/history", response_class=HTMLResponse)
 def page_history(request: Request, code: str):
-    return _page(request, code, "history")
+    return _shell(request, code, "history")
 
 
 @app.get("/g/{code}/player/{pid}", response_class=HTMLResponse)
 def page_player(request: Request, code: str, pid: int):
+    return _shell(request, code, "leaderboard", player=pid)
+
+
+@app.get("/g/{code}/api/player/{pid}")
+def api_player(code: str, pid: int):
+    """Player-stats data for the in-app overlay (Task 4)."""
     con = get_con()
     g = require_group(con, code)
-    p = con.execute("SELECT * FROM players WHERE id=? AND group_id=?", (pid, g["id"])).fetchone()
+    p = con.execute("SELECT id FROM players WHERE id=? AND group_id=?", (pid, g["id"])).fetchone()
     if not p:
         con.close()
         raise HTTPException(404, "player not found")
     data = player_payload(con, g, pid)
     con.close()
-    return templates.TemplateResponse(request, "player.html",
-                                      {"g": dict(g), "code": code,
-                                       "tab": "leaderboard", "p": data})
+    return data
 
 
 # --- read JSON (polled every 3s by live views) ----------------------------
@@ -459,21 +457,34 @@ def api_leaderboard(code: str, scope: str = "group", mode: str = "singles"):
 
 
 @app.get("/g/{code}/api/history")
-def api_history(code: str):
+def api_history(code: str, scope: str = "group"):
     con = get_con()
     g = require_group(con, code)
-    rows = con.execute(
-        "SELECT * FROM matches WHERE group_id=? AND status='finished' AND deleted=0 "
-        "ORDER BY COALESCE(finished_at, created_at) DESC, id DESC", (g["id"],)
-    ).fetchall()
+    if scope == "everyone":
+        gids = {g["id"]: None}                        # this group + all public groups
+        for pg in public_groups(con):
+            gids[pg["id"]] = pg["name"]
+        ph = ",".join("?" for _ in gids)
+        rows = con.execute(
+            f"SELECT * FROM matches WHERE group_id IN ({ph}) AND status='finished' AND deleted=0 "
+            "ORDER BY COALESCE(finished_at, created_at) DESC, id DESC", tuple(gids.keys())
+        ).fetchall()
+        tag_of = gids
+    else:
+        rows = con.execute(
+            "SELECT * FROM matches WHERE group_id=? AND status='finished' AND deleted=0 "
+            "ORDER BY COALESCE(finished_at, created_at) DESC, id DESC", (g["id"],)
+        ).fetchall()
+        tag_of = {}
     done = []
     for m in rows:
         v = match_view(con, m)
         v["voided"] = bool(m["voided"])
         v["story"] = scoring.match_story(con, m["id"]) if v.get("per_point") else None
+        if tag_of.get(m["group_id"]):
+            v["group"] = tag_of[m["group_id"]]
         done.append(v)
     con.close()
-    # v2: no approval/delete request cards — finished results are immediate.
     return {"requests": [], "matches": done}
 
 

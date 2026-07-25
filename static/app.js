@@ -540,7 +540,7 @@ function renderPlayer(ov, p) {
     ? p.matches.map(m => historyCardStatic(m).outerHTML).join("")
     : `<div class="empty">No matches yet.</div>`;
   ov.innerHTML = `
-    <div style="margin:12px 16px 0"><button class="btn ghost sm" onclick="closePlayer()">← Back</button></div>
+    <div style="margin:12px 16px 0"><button class="btn ghost sm" onclick="closePlayer()">← Ranks</button></div>
     <div class="card"><div class="side" style="font-size:18px;align-items:flex-start">
       ${av(p.name).replace('avatar"', 'avatar" style="width:34px;height:34px;font-size:15px"')}
       <div class="pn"><div class="pn-game" style="font-size:20px">${esc(p.name)}${p.live ? '<span class="dot pulse"></span>' : ''}${you ? ' <span class="youpill">YOU</span>' : ''}</div>

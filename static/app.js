@@ -356,7 +356,9 @@ function editName() {
     <label class="fieldlab" style="margin-top:8px">Real name (optional)</label>
     <input id="enReal" maxlength="40" value="${esc(ME.player_real_name || "")}">
     <button class="btn" style="margin-top:10px" onclick="saveName()">Save</button>
-    <div class="err" id="enErr"></div></div>`;
+    <div class="err" id="enErr"></div>
+    <div class="muted" style="text-align:center;margin-top:10px">${esc(ME.email || "")} ·
+      <a href="#" onclick="Auth.signOut();location.reload();return false">sign out</a></div></div>`;
 }
 async function saveName() {
   const err = document.getElementById("enErr"); err.textContent = "";

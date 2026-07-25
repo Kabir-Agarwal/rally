@@ -240,8 +240,18 @@ def _migrate(con):
 def init_db(path=DB_PATH):
     _RATING_CACHE.clear()   # fresh DB -> drop any cached ratings (keeps tests isolated)
     if _is_pg():
+        # COLD-START FIX (Task 3): on Postgres, a provisioned DB already has the schema.
+        # One cheap presence check skips create_all + the migration ALTERs entirely — turning
+        # ~14 network round-trips per cold container into 1. Only a truly fresh DB pays setup.
+        eng = _engine()
+        try:
+            with eng.connect() as c:
+                c.exec_driver_sql("SELECT 1 FROM players LIMIT 1")
+            return                      # schema present -> nothing to do
+        except Exception:
+            pass                        # fresh DB -> create + migrate once
         import schema
-        schema.metadata.create_all(_engine())
+        schema.metadata.create_all(eng)
         con = connect(path)
         _migrate(con)
         con.close()

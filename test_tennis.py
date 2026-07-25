@@ -189,6 +189,27 @@ def test_point_logs_only_for_per_point_and_tally_counts_everything():
     assert tally[a] == 1
 
 
+def test_tt_direct_award_without_confirmed_rotation():
+    """Task 5: a Triple Threat game can be awarded straight to the winner with no confirmed
+    rotation. It is stored with a NULL server (no serve attribution — degrades cleanly instead
+    of guessing), still counts in the tally, and mixes fine with attributed games."""
+    con = mem()
+    gid, _ = db.create_group(con, "G")
+    a, b, c = (db.add_player(con, gid, n) for n in "ABC")
+    m = logic.start_match(con, gid, "tt", [], [], [a, b, c], a)
+    logic.log_tt_game(con, m, a, a)                 # game 1: attributed (a serves, a wins)
+    logic.log_tt_game(con, m, None, b, None)        # game 2: direct award to b, server unknown
+    games = db.tt_games(con, m)
+    assert len(games) == 2
+    assert games[1]["winner_player_id"] == b
+    assert games[1]["server_player_id"] is None     # no serve attribution for the direct award
+    assert games[0]["server_player_id"] == a        # the attributed game is unaffected
+    tally = {}
+    for g in games:
+        tally[g["winner_player_id"]] = tally.get(g["winner_player_id"], 0) + 1
+    assert tally[a] == 1 and tally[b] == 1           # both games counted
+
+
 def test_serve_stats_individual_doubles_return_team():
     con = mem()
     gid, _ = db.create_group(con, "G")

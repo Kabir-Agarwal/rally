@@ -169,6 +169,9 @@ function hydrateEditor(m) {
       const sit = rot.find(x => x !== last.server && x !== last.receiver);
       EDIT.cur = { server: last.receiver, receiver: sit, sitter: last.server };
     } else EDIT.cur = { server: rot[0], receiver: rot[1], sitter: rot[2] };
+    // Rotation is "known" (serve attributable) for game 1 or after the last game recorded a
+    // server. A prior direct award (server null) leaves the current rotation unconfirmed.
+    EDIT.rotKnown = !g.length || !!g[g.length - 1].server;
     EDIT.game = new Engine.PointMatch("singles", [EDIT.cur.server, EDIT.cur.receiver]);
     renderTTEditor();
   } else {
@@ -240,10 +243,27 @@ function renderTTEditor(msg, confirm) {
       <button class="btn sm" onclick="finishMatch()">Mark finished</button></div><div class="err" id="edErr"></div></div>`;
   const btns = document.getElementById("ttButtons");
   if (confirm) { renderRotationConfirm(btns, confirm); return; }
+  // Direct-award row (Task 5): a + button per player credits a game immediately, no rotation
+  // confirmation required. When the rotation is unconfirmed, serve won't be tracked and a link
+  // lets the scorer set it.
+  const award = `<div class="ttaward"><div class="muted" style="margin-top:10px">Or award a game directly:</div>
+    <div class="chips" style="margin-top:6px">${m.rot.map(id => `<button class="btn ghost sm" style="flex:0 0 auto" onclick="ttAward(${id})">+ ${esc(m.names[id])}</button>`).join("")}</div>
+    ${m.rotKnown === false ? `<div class="note" style="color:var(--clay-deep)">Rotation unconfirmed — serve isn't tracked for these games. <a href="#" onclick="ttSetRotation();return false"><b>Set who's serving</b></a></div>` : ""}</div>`;
   btns.innerHTML = `<div class="row"><button class="btn clay" onclick="ttPoint(1)">Point ${esc(m.names[c.server])} 🎾</button>
     <button class="btn clay" onclick="ttPoint(2)">Point ${esc(m.names[c.receiver])}</button></div>
-    <button class="btn ghost sm" style="margin-top:8px;width:auto" onclick="ttPointUndo()">↶ Undo point</button>`;
+    <button class="btn ghost sm" style="margin-top:8px;width:auto" onclick="ttPointUndo()">↶ Undo point</button>${award}`;
 }
+// Award a completed game straight to `winnerId`. Uses the current rotation for serve attribution
+// only when it's confirmed; otherwise the game is stored with no server (degrades cleanly). The
+// next game's rotation is then left unconfirmed until the scorer sets it or scores per-point.
+function ttAward(winnerId) {
+  commitTTGame(winnerId);                                   // respects EDIT.rotKnown for serve
+  EDIT.cur = { server: EDIT.cur.receiver, receiver: EDIT.cur.sitter, sitter: EDIT.cur.server };  // standard suggestion
+  EDIT.rotKnown = false;                                    // not confirmed for the next game
+  nextTTGame();
+}
+// Set the rotation without ending a game (used when it's unconfirmed) — reuses the picker.
+function ttSetRotation() { ttPickRotation(); }
 function ttPoint(side) {
   const s = EDIT.game.addPoint(side);
   const won = (s.curGames[0] + s.curGames[1]) >= 1;   // a single game completed
@@ -281,13 +301,19 @@ function ttPickSet(role, id, btn) {
     document.getElementById("pickConfirm").disabled = false;
   } else document.getElementById("pickConfirm").disabled = true;
 }
-function ttApply() { const conf = EDIT._pending; commitTTGame(conf.winnerId); EDIT.cur = conf.std; nextTTGame(); }
+function ttApply() { const conf = EDIT._pending; commitTTGame(conf.winnerId); EDIT.cur = conf.std; EDIT.rotKnown = true; nextTTGame(); }
 function ttApplyCustom() {
   const p = EDIT._pick; const sit = EDIT.rot.find(x => x !== p.server && x !== p.receiver);
-  commitTTGame(EDIT._pending.winnerId); EDIT.cur = { server: p.server, receiver: p.receiver, sitter: sit }; nextTTGame();
+  if (EDIT._pending) commitTTGame(EDIT._pending.winnerId);   // set-only (from ttSetRotation) has no pending game
+  EDIT.cur = { server: p.server, receiver: p.receiver, sitter: sit }; EDIT.rotKnown = true; nextTTGame();
 }
+// Serve/receiver are sent only when the rotation is confirmed; otherwise null → the server drops
+// serve attribution for that game instead of guessing (Task 5).
 function commitTTGame(winnerId) {
-  enqueue(`/g/${GROUP.code}/api/match/${EDIT.mid}/tt`, { server: EDIT.cur.server, receiver: EDIT.cur.receiver, winner: winnerId });
+  const body = EDIT.rotKnown === false
+    ? { winner: winnerId }
+    : { server: EDIT.cur.server, receiver: EDIT.cur.receiver, winner: winnerId };
+  enqueue(`/g/${GROUP.code}/api/match/${EDIT.mid}/tt`, body);
   EDIT.gameNo += 1;
 }
 function nextTTGame() { EDIT.game = new Engine.PointMatch("singles", [EDIT.cur.server, EDIT.cur.receiver]); EDIT._pending = null; EDIT._pick = null; renderTTEditor(); }

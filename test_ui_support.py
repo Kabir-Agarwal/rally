@@ -40,8 +40,9 @@ def test_live_has_win_prob(tmp_path):
     c.post(f"/g/{code}/api/match/start", json={"kind": "singles", "side1": [a], "side2": [b]})
     m = c.get(f"/g/{code}/api/live").json()["matches"][0]
     assert len(m["win_prob"]) == 2 and m["win_prob"][0]["pct"] + m["win_prob"][1]["pct"] == 100
-    # TT gets a 3-way bar
-    c.post(f"/g/{code}/api/match/start", json={"kind": "tt", "rotation": [a, b, cc]})
+    # TT gets a 3-way bar — use fresh players (a,b are busy: one live match per player)
+    d, e, f = [c.post(f"/g/{code}/api/player", json={"name": n}).json()["id"] for n in ["D", "E", "F"]]
+    c.post(f"/g/{code}/api/match/start", json={"kind": "tt", "rotation": [d, e, f]})
     tt = [x for x in c.get(f"/g/{code}/api/live").json()["matches"] if x["kind"] == "tt"][0]
     assert len(tt["win_prob"]) == 3
 

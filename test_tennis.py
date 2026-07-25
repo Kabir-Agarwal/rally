@@ -97,15 +97,15 @@ def test_whole_history_rebuild_after_edit_and_delete():
 def test_overlapping_matches_finish_order():
     con = mem()
     gid, _ = db.create_group(con, "G")
-    a, b, c = (db.add_player(con, gid, n) for n in "ABC")
-    # a can be in two live matches at once
+    a, b, c, d = (db.add_player(con, gid, n) for n in "ABCD")
+    # two DIFFERENT live matches at once (Task 6: a player can't be in two); rated in finish order
     m1 = logic.start_match(con, gid, "singles", [a], [b], [], a)
-    m2 = logic.start_match(con, gid, "singles", [a], [c], [], a)
+    m2 = logic.start_match(con, gid, "singles", [c], [d], [], c)
     logic.edit_sets(con, m2, [(6, 0)]); logic.finish_match(con, m2)
     logic.edit_sets(con, m1, [(6, 0)]); logic.finish_match(con, m1)
-    # order is by finished_at; both processed, a rated in both
     st = db.rating_state(con, gid)
-    assert st["singles_n"][a] == 2
+    assert st["singles_n"][a] == 1 and st["singles_n"][c] == 1
+    assert st["singles"][a] > 1200 and st["singles"][c] > 1200
 
 
 # ---- v2: instant results + admin void/restore ----

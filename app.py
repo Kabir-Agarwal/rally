@@ -21,6 +21,7 @@ import logic
 import scoring
 import ratings
 import auth
+import auth_playerid
 from ratings import START
 
 BASE = Path(__file__).parent
@@ -299,6 +300,39 @@ def api_auth_me(request: Request):
     u = current_user(request)
     return {"signed_in": bool(u), "email": u.get("email") if u else None,
             "name": u.get("name") if u else None}
+
+
+# --- player-ID sign-in (Task 6). Public player code + password -> Supabase session. The email is
+#     resolved server-side ONLY and never returned. DEPLOY-GATED on the identity migration
+#     (players.code / auth_id / password_set applied to live Postgres via MCP). ------------------
+def _client_ip(request: Request) -> str:
+    xff = request.headers.get("x-forwarded-for")
+    return (xff.split(",")[0].strip() if xff else (request.client.host if request.client else "?"))
+
+
+@app.post("/api/auth/player-id")
+async def api_player_id_signin(request: Request):
+    d = await request.json()
+    con = get_con()
+    try:
+        status, body = auth_playerid.player_signin(con, d.get("player_id"), d.get("password"), _client_ip(request))
+    finally:
+        con.close()
+    return JSONResponse(body, status)
+
+
+@app.post("/api/auth/set-password")
+async def api_set_password(request: Request):
+    d = await request.json()
+    u = current_user(request)
+    if not u:
+        return JSONResponse({"error": "sign in first"}, 401)
+    con = get_con()
+    try:
+        status, body = auth_playerid.do_set_password(con, u["sub"], d.get("password") or "", auth.bearer(request))
+    finally:
+        con.close()
+    return JSONResponse(body, status)
 
 
 # --- landing --------------------------------------------------------------

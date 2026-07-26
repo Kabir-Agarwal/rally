@@ -42,6 +42,11 @@ CREATE TABLE IF NOT EXISTS players (
   name TEXT NOT NULL,          -- GAME NAME (the handle everyone sees, unique per group)
   real_name TEXT,             -- optional real name shown as subtext; may duplicate
   created_at TEXT NOT NULL,
+  -- identity foundation (Task 3/6): permanent public code + immutable auth id + password flag.
+  -- On LIVE Postgres these come from the deliberate MCP migration, NOT this string (SQLite dev only).
+  code TEXT,                  -- permanent public 5-char player code (Name#CODE); unique when set
+  auth_id TEXT,               -- immutable identity = auth.users(id) uuid (text on SQLite)
+  password_set INTEGER NOT NULL DEFAULT 0,  -- 1 once the account has a password (Task 6)
   -- SQLite-dev-only: COLLATE NOCASE is not valid on Postgres. This whole SCHEMA string
   -- runs ONLY on the SQLite path (executescript). Postgres uses schema.py, where the same
   -- case-insensitive uniqueness is a functional unique index on LOWER(name). Keep in sync.
@@ -235,6 +240,15 @@ def _migrate(con):
         con.commit()
     except Exception:
         pass
+    # Identity foundation (Task 6). SQLite-dev ONLY: on live Postgres these columns are added by
+    # the deliberate MCP migration (migrations/2026-07-27_identity_foundation.sql), never relied on
+    # here — this try/except is exactly the silent path the FOUNDATION dispatch warned about.
+    for col in ("code TEXT", "auth_id TEXT", "password_set INTEGER NOT NULL DEFAULT 0"):
+        try:
+            con.execute(f"ALTER TABLE players ADD COLUMN {col}")
+            con.commit()
+        except Exception:
+            pass
 
 
 def init_db(path=DB_PATH):

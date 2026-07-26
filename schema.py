@@ -29,6 +29,9 @@ players = Table(
     Column("name", Text, nullable=False),        # game name
     Column("real_name", Text),                   # optional real name (subtext)
     Column("created_at", Text, nullable=False),
+    Column("code", Text),                        # permanent public player code (Name#CODE)
+    Column("auth_id", Text),                     # immutable identity = auth.users(id)
+    Column("password_set", Integer, nullable=False, server_default="0"),  # 1 once a password is set
 )
 # case-insensitive uniqueness per group (mirrors "UNIQUE(group_id, name COLLATE NOCASE)")
 Index("ux_players_group_lower_name", players.c.group_id, func.lower(players.c.name), unique=True)

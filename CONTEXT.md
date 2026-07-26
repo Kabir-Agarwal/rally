@@ -137,6 +137,32 @@ SQLite file `tennis.db` is created on first run (gitignored).
   fresh context shows the sign-in screen (Google/email — prod has Supabase keys); a junk token is
   cleared by the guard and the sign-in still renders. No console errors.
 
+## 2026-07-26-FOUNDATION dispatch — BLOCKED at Task 0 & Task 4 (latest)
+Only Task 1 (deploy) was actionable; the rest is halted pending Kabir. Nothing schema-related was
+applied or committed.
+- **Task 0 STOP — design files missing.** `rally-auth.jsx` and `rally-v11.jsx` (the approved
+  spec for all following UI/identity work) are NOT in the repo folder — only `docs/mockup-v9.jsx`
+  exists. Per the dispatch ("do not guess at the design") this halts Tasks 2 (freeze), 7 (gap
+  inventory) and the design-conformance of 3/6. Kabir must add the two files.
+- **Task 4 STOP — no Supabase MCP.** This environment has no Supabase MCP tools, and raw Postgres
+  ports are unreachable from the sandbox. Per the dispatch, do NOT fall back to the app's silent
+  auto-migration. So the live identity migration (Tasks 3-apply, 4, 5-backfill) cannot be applied
+  or verified here — the SQL must be applied separately once decisions are made.
+- **Task 1 DONE.** Redeployed current master `edb33ca` (deployment `dpl_265e89T15oC6gRCvin6qd2YmoQbY`,
+  READY, cache-bust `b6d6a5e8d4`). Verified LIVE that the OAuth return surfaces every signed-out
+  outcome: error→"Sign-in failed: access_denied — …", PKCE `?code=`→"…code_flow — Supabase
+  returned a code, not a token", empty hash→"…empty — came back from Google with no token and no
+  error". NOT covered: a COMPLETED Google login (real token accepted by the server) has never been
+  exercised end to end — anonymous checks only hit the signed-out/error path.
+- **Identity re-architecture is a real contradiction, not just work.** Today a player is a
+  per-group INTEGER row (`players.group_id`, a human in 2 groups = 2 rows) linked to an auth user
+  via `player_links(group_id, auth_sub, player_id)`; ratings are per-group. Task 3 wants ONE global
+  player = `auth.users(id)` (uuid) with membership via `group_members`. Merging existing per-group
+  rows into one global row is semantically ambiguous (which game_name wins? per-group ratings must
+  be re-scoped) and re-keys every FK (match_players, tt_games, point_logs, approvals, matches.
+  logger_player_id, player_links) on LIVE production data. Kabir must decide the merge before any
+  SQL is finalized. Recorded in the deliverable's CONTRADICTIONS.
+
 ## UI rebuild to approved mockup v9 (latest)
 Rebuilt the drifted SCREENS to match `docs/mockup-v9.jsx` (the palette already matched; the
 layouts did not). Full drift audit in `docs/drift-inventory.md`. Suite: 81 Python + boot/engine/

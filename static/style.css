@@ -31,10 +31,13 @@ a{color:inherit;text-decoration:none}
 /* tab bar */
 .tabs{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:412px;
   display:flex;background:var(--cream);border-top:1px solid var(--line);z-index:30}
-.tabs a{flex:1;text-align:center;padding:9px 2px 10px;font-size:10px;color:var(--muted)}
-.tabs a .ic{display:block;font-size:19px;line-height:1.2}
-.tabs a.on{color:var(--clay);font-weight:700}
-.tabs a.on .ic{filter:none}
+/* tab bar buttons: the SPA shell uses <button> (client-side switchTab), so target buttons and
+   strip the default button chrome (border/background) that was rendering them boxy. */
+.tabs a,.tabs button{flex:1;text-align:center;padding:9px 2px 10px;font-size:10px;color:var(--muted);
+  border:none;background:transparent;font-family:inherit;cursor:pointer}
+.tabs a .ic,.tabs button .ic{display:block;font-size:19px;line-height:1.2}
+.tabs a.on,.tabs button.on{color:var(--clay);font-weight:700}
+.tabs a.on .ic,.tabs button.on .ic{filter:none}
 
 /* cards */
 .card{background:var(--cream);border-radius:var(--radius);padding:14px;margin:12px 16px;

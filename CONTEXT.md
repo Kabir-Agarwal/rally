@@ -163,7 +163,29 @@ applied or committed.
   logger_player_id, player_links) on LIVE production data. Kabir must decide the merge before any
   SQL is finalized. Recorded in the deliverable's CONTRADICTIONS.
 
-## CLEAN FOUNDATION — PHASE 2: Tasks A+B DONE & browser-verified; TESTS+DEPLOY remain (latest)
+## CLEAN FOUNDATION — COMPLETE & DEPLOYED (Phase 2 A–D done) (latest)
+The clean-foundation rewrite is live. Suite GREEN (93 Python + boot/engine/sync Node). App boots on
+the migrated Postgres and scores a match with group_id NULL.
+- **Deployed:** dpl_C9rXw3BkR7EA7ijTiyJjpiUYhjY6 (READY), cache-bust `a966babada`. Live verify:
+  `/` serves the SPA (not 500); `/api/me`, `/api/leaderboard` work against live PG; config=supabase;
+  `/api/auth/player-id` returns a clean 401 (schema-correct — no dropped-column error).
+- **Tests ported (Task C) — rewrites where a concept was removed, NOTHING silently deleted:**
+  cache (in-process rating cache gone) -> rating correctness + global/?group= filter; admin (global
+  god-mode rename/void/link/regen/player-cascade gone) -> per-GROUP admin guards + remaining
+  key-gated god-mode (overview, match delete); auth/onboarding/names (admin-added players +
+  player_links + per-group claim/link + private-name-hiding gone) -> self-serve global identity,
+  friends-only picker, public-instant/private-request join; tennis (voided/restore gone) ->
+  unapprove-rollback + dispute + delete-excludes, and finish-immediate -> finish-needs-approval.
+  Coverage genuinely dropped only where the FEATURE is gone: player hard-delete cascade (no
+  player-delete endpoint), match void/restore & admin relink (replaced by approval flow), per-group
+  private-name-hiding. Doubles intra-side serve order is now uuid-ordered (live schema has no
+  per-side order column) — serve test asserts the side-level invariant.
+- **Still open (unchanged, do NOT touch): RLS is DISABLED on all live tables** — the public anon key
+  can read/write every row. Owner-deferred hardening pass.
+- **Not verifiable here:** a real signed-in Google/Supabase session (no creds in this env) — only
+  anonymous/mock paths were exercised.
+
+## CLEAN FOUNDATION — PHASE 2: Tasks A+B DONE & browser-verified (superseded by the section above)
 Resume map. NOT deployed — the gate forbids deploy until the full suite is green (the ~83 old tests
 are still red on the dead model). **Browser boot+score WORKS** (below).
 - **VERIFIED IN-BROWSER (real uvicorn + fetch, mock mode):** `/` serves the SPA; a signed-in user

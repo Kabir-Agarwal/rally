@@ -10,8 +10,8 @@
 <body>
 <div class="app">
   <div class="hd">
-    {# Neutral header until the client confirms a signed-in session — no group name leaks before sign-in (Task 5). JS swaps in the group name via setHeaderName() once /api/me confirms. #}
-    <div class="name" onclick="openSwitcher()">🎾 <span id="hdName">Rally</span> <span class="chev">▾</span></div>
+    {# Group switcher lives here as a FILTER (top-left, next to the name). No group = "All groups". #}
+    <div class="name" onclick="openSwitcher()">🎾 <span id="hdName">All groups</span> <span class="chev">▾</span></div>
     <div class="sub" id="hdSub">tennis scorer</div>
     <div class="court-line"></div>
   </div>
@@ -21,7 +21,7 @@
 
   <div class="switcher" id="switcher" onclick="if(event.target.id=='switcher')closeSwitcher()">
     <div class="sheet2">
-      <div style="font-weight:800;margin:4px 0 8px">Your groups</div>
+      <div style="font-weight:800;margin:4px 0 8px">View</div>
       <div id="switcherList" class="muted">…</div>
     </div>
   </div>
@@ -33,9 +33,11 @@
     <button data-tab="history"     onclick="switchTab('history')"><span class="ic">📜</span>History</button>
   </nav>
   <script>
-    window.GROUP={code:"{{ g.code }}",name:"{% if g.is_public %}{{ g.name|e }}{% endif %}",is_public:{{ 'true' if g.is_public else 'false' }}};
-    window.INIT={tab:"{{ tab }}",player:{{ player if player else 'null' }}};
-    window.PAGE="spa";
+    {# A group is only ever a FILTER; null = everything the signed-in player has. #}
+    window.GROUP = {% if g %}{code:"{{ g.code }}", name:"{{ g.name|e }}", is_public:{{ 'true' if g.is_public else 'false' }}}{% else %}null{% endif %};
+    window.FILTER = window.GROUP ? window.GROUP.code : null;
+    window.INIT = {tab:"{{ tab }}", player:{% if player %}"{{ player }}"{% else %}null{% endif %}};
+    window.PAGE = "spa";
   </script>
 </div>
 <script src="/static/auth.js?v={{ v }}"></script>

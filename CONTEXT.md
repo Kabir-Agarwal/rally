@@ -163,7 +163,57 @@ applied or committed.
   logger_player_id, player_links) on LIVE production data. Kabir must decide the merge before any
   SQL is finalized. Recorded in the deliverable's CONTRADICTIONS.
 
-## CLEAN FOUNDATION rewrite (2026-07-27, Option C) — PHASE 1 done, NOT deployed (latest)
+## CLEAN FOUNDATION — PHASE 2 IN PROGRESS (backend done+verified; client wiring remains) (latest)
+Resume map for the next session. NOT deployed (client not wired; suite not green).
+- **DONE + verified this phase (committed):**
+  - `app.py` FULLY rewritten to the global model (Task A). All routes are global `/api/*` with an
+    optional `?group=<code>` filter. Verified via a TestClient smoke: first sign-in -> needs_name ->
+    `/api/me/claim` (creates player + 5-char code); start a NULL-group singles match; score points;
+    `/api/match/<id>/finish` -> pending_approval (logger auto-approves); other participant
+    `/api/match/<id>/approve` -> **counted, group_id NULL**; `/unapprove` -> pending_approval
+    (ratings roll back). App imports + boots at process level (require_schema passes on fresh SQLite).
+  - `scoring.py` — serve_return_stats accepts group_id=None (global player page).
+  - `templates/shell.html` — group-optional; served as the SPA; `window.GROUP` is null unless a group
+    filter is active; `window.FILTER` = active group code or null; header is a switcher/filter.
+  - KEY API CONTRACTS (the client must call these): GET `/api/me` -> {signed_in, player_id,
+    player_name, player_real_name, code, needs_name?}; POST `/api/me/claim` {name, real_name};
+    POST `/api/me/rename`; GET `/api/live|meta|leaderboard?mode=|history|player/<id>|match/<id>`
+    (+ optional `?group=CODE`); POST `/api/match/start` {kind, side1, side2, rotation, group?} (logger
+    = the token's player); POST `/api/match/<id>/{point,point/undo,sets,tt,tt/undo,date,finish,delete,
+    approve,unapprove,dispute,freeze,resume}`; GET `/api/friends`; POST `/api/friend/{request,accept,
+    decline}` {id|code}; GET `/api/players/search?q=`; GET `/api/groups`; POST `/api/group/create`
+    {name}; POST `/api/group/join` {code} (public=instant, private=request); POST
+    `/api/group/<gid>/{public,rename,code,admin,remove,delete,approve,decline}` (admin-only) + GET
+    `/api/group/<gid>/requests`.
+- **REMAINING — Task B (client, static/app.js + static/log.js):** swap EVERY `/g/${GROUP.code}/api/*`
+  call to the global contract above via a helper like `G(path)` = `"/api"+path` + `?group=FILTER`
+  when set. Specifics: (1) IDs are now UUID STRINGS — every `openPlayer(${p.id})` / `openPlayer(${r.id})`
+  must become `openPlayer('${p.id}')` (quote the id). (2) `ensureIdentity()` -> GET `/api/me`;
+  `chooseName()` -> POST `/api/me/claim`; `saveName()/editName` -> `/api/me/rename`. (3) `authGate()`
+  -> drop the group gate: signed-in => full; signed-out => showSignInGate; no per-group READONLY.
+  (4) `boot()` -> delete the `PAGE==="landing"` branch and `if(!GROUP)return`; always SPA; land on
+  Live. DELETE initLanding/renderLanding/landJoin/landCreate and `templates/landing.html` usage.
+  (5) tab loaders: initLive->`G('/live')`, loadRanks->`G('/leaderboard?mode='+RANK.mode)` (RANK.scope
+  gone), loadHistory->`G('/history')`, openPlayer/openPlayerNoPush/renderPlayer date->`G('/player/'+pid)`
+  / `G('/match/'+id+'/date')`. (6) Groups tab: `initGroups`->GET `/api/groups`; create/join->
+  `/api/group/create|join`; flipPublic->`/api/group/<gid>/public`; YOU card uses `/api/me`.
+  (7) `openSwitcher()` -> list the user's groups (from `/api/groups`) + "All groups"; picking sets
+  `window.FILTER` and re-renders (a FILTER, navigates to `/` or `/g/<code>/live`). (8) router:
+  `routeFromPath` parse `/<tab>` and `/g/<code>/<tab>`; `switchTab` pushState to `/<tab>` (or
+  `/g/<code>/<tab>` when filtered). (9) log.js: `refreshMeta`->`G('/meta')`; `startPayload` add
+  `group: window.FILTER||null` and drop `logger`; `startMatch`->`/api/match/start`; `loadEditor`->
+  `G('/live')`; pt/ptUndo/sets/finish/delete/tt/played -> `/api/match/<mid>/...` and `/api/played`.
+  Keep the fail-open boot + ASSET_V cache-bust.
+- **REMAINING — Task C (tests):** the ~83 old tests assume the dead model and are RED. Port them to
+  the global-uuid model (create_player(uuid,...), null-group matches, status='counted', approvals,
+  friends, group admin). Keep test_playerid green (already ported, 8 pass). Add coverage:
+  score-with-no-group, global vs ?group= rating filter, first-sign-in creates player+code, friends
+  accepted-only picker, group admin guards, count-only-when-all-approve, unapprove rolls back,
+  freeze/resume need all participants. Suite MUST be green before deploy.
+- **REMAINING — Task D:** browser boot+score verify (mock mode), then deploy.py + live check.
+- RLS still DISABLED on live (owner-deferred; do NOT touch).
+
+## CLEAN FOUNDATION rewrite (2026-07-27, Option C) — PHASE 1 done, NOT deployed (earlier)
 Live Postgres was rebuilt clean (global uuid identity; migration rally_clean_foundation, applied by
 the orchestrator). The app code is being rewired to it. **This is partial — do NOT deploy until the
 HTTP routes + client are rewired and a match can be scored over HTTP.**

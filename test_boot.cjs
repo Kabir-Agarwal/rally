@@ -92,10 +92,12 @@ const code = fs.readFileSync(path.join(__dirname, "static", "app.js"), "utf8");
   const r = await sb.raceTimeout(new Promise(() => { }), 50, "FALLBACK");
   assert.strictEqual(r, "FALLBACK", "raceTimeout returns fallback on timeout");
 
-  // 5) failOpen renders the sign-in view on the landing page
-  sb = makeSandbox(); sb.window.PAGE = "landing"; vm.createContext(sb); vm.runInContext(code, sb);
+  // 5) failOpen when signed OUT renders the sign-in gate (global model: `/` serves the SPA, no
+  //    landing page). showSignInGate is stubbed to record that it ran.
+  sb = makeSandbox(); vm.createContext(sb); vm.runInContext(code, sb);
+  sb.showSignInGate = () => { sb._host.__signIn = true; };   // override the DOM-heavy real one
   sb.failOpen();
-  assert.strictEqual(sb._host.__signIn, true, "failOpen -> sign-in view rendered");
+  assert.strictEqual(sb._host.__signIn, true, "failOpen (signed out) -> sign-in gate rendered");
 
   // 6) Task 4: failOpen writes an error card (not blank) when auth.js is missing
   sb = makeSandbox(); sb.window.PAGE = "landing"; sb.window.Auth = undefined; sb.Auth = undefined;

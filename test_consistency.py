@@ -58,16 +58,16 @@ def test_client_engine_matches_server_replay(tmp_path):
     py_sets = [list(x) for x in scoring.all_sets_for_storage(points)]
     assert client_sets == py_sets, "client engine disagrees with Python scorer"
 
-    # 3) server replay: post each point, then read stored sets
+    # 3) server replay: post each point, then read stored sets (global model, no group)
+    from conftest import signin
     c = _client(tmp_path)
-    code = c.post("/api/group/create", json={"name": "SYNC"}).json()["code"]
-    a = c.post(f"/g/{code}/api/player", json={"name": "A"}).json()["id"]
-    b = c.post(f"/g/{code}/api/player", json={"name": "B"}).json()["id"]
-    mid = c.post(f"/g/{code}/api/match/start",
-                 json={"kind": "singles", "side1": [a], "side2": [b], "logger": a}).json()["id"]
+    a, ha = signin(c, "a", "A")
+    b, hb = signin(c, "b", "B")
+    mid = c.post("/api/match/start",
+                 json={"kind": "singles", "side1": [a], "side2": [b], "group": None}, headers=ha).json()["id"]
     last = None
     for w in points:
-        last = c.post(f"/g/{code}/api/match/{mid}/point", json={"winner_side": w}).json()
+        last = c.post(f"/api/match/{mid}/point", json={"winner_side": w}, headers=ha).json()
     server_sets = [[s["g1"], s["g2"]] for s in last["sets"]]
 
     assert server_sets == client_sets, "server replay state != client engine state"

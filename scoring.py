@@ -102,9 +102,15 @@ def serve_return_stats(con, group_id, player_id):
     """
     served = held = ret_games = broke = 0
     live_matches = 0
-    ms = con.execute(
-        "SELECT * FROM matches WHERE group_id=? AND kind IN ('singles','doubles','tt')", (group_id,)
-    ).fetchall()
+    if group_id is None:                       # global player page: all of this player's matches
+        ms = con.execute(
+            "SELECT m.* FROM matches m JOIN match_players mp ON mp.match_id=m.id "
+            "WHERE mp.player_id=? AND m.kind IN ('singles','doubles','tt')", (player_id,)
+        ).fetchall()
+    else:
+        ms = con.execute(
+            "SELECT * FROM matches WHERE group_id=? AND kind IN ('singles','doubles','tt')", (group_id,)
+        ).fetchall()
     for m in ms:
         s1, s2, rot = db.sides(con, m["id"])
         mine = None

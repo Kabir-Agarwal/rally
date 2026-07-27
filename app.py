@@ -1,11 +1,8 @@
-"""Rally — tennis scorer. FastAPI app. Phone-first, no accounts, groups reached by 6-char code.
+"""Rally — tennis scorer. CLEAN FOUNDATION (global uuid identity, groups optional).
 
-The group code in the URL is the capability: possessing it = member = can write.
-# ponytail: no server-side session/accounts. Code = auth. Public/private governs the
-# global (cross-group) feeds only; the read-only "watch" UX is client state. Add real
-# auth only if groups ever need to exclude code-holders — out of scope (v2).
-
-Admin god-mode lives behind one secret ADMIN_KEY (from .env / env var). See CONTEXT.md.
+Identity is the auth token alone (players.id = auth.users.id). A group is only ever a FILTER
+(?group=<code>); no group = everything the signed-in player has. Writes require a signed-in user
+with a player row. Admin god-mode is behind one secret ADMIN_KEY.
 """
 from __future__ import annotations
 import os
@@ -31,7 +28,6 @@ app.mount("/static", StaticFiles(directory=BASE / "static"), name="static")
 
 @app.middleware("http")
 async def _no_cache_static(request: Request, call_next):
-    # Serve fresh JS/CSS — avoids stale assets after a deploy (and during dev).
     resp = await call_next(request)
     if request.url.path.startswith("/static/"):
         resp.headers["Cache-Control"] = "no-cache"
@@ -39,8 +35,6 @@ async def _no_cache_static(request: Request, call_next):
 
 
 def _asset_version():
-    """Short content hash of the client assets. Appended as ?v=… to every <script>/<link>
-    so a new deploy is ALWAYS fetched fresh, even if a phone cached the old file."""
     import hashlib
     h = hashlib.md5()
     for f in ("app.js", "auth.js", "engine.js", "sync.js", "log.js", "style.css"):
@@ -52,13 +46,12 @@ def _asset_version():
 
 ASSET_V = _asset_version()
 templates = Jinja2Templates(directory=BASE / "templates")
-templates.env.globals["v"] = ASSET_V     # available in every template as {{ v }}
+templates.env.globals["v"] = ASSET_V
 
-db.init_db()
+db.init_db()   # verifies (PG) or builds (SQLite) the clean schema; FAILS LOUD if unmigrated
 
 
 def _load_admin_key():
-    # ponytail: manual .env read, no python-dotenv dependency for one value.
     v = os.environ.get("ADMIN_KEY")
     if v:
         return v.strip()
@@ -75,44 +68,57 @@ ADMIN_KEY = _load_admin_key()
 
 # --- helpers --------------------------------------------------------------
 def get_con():
-    con = db.connect()
-    # v2: no approval/deadline machinery — results count immediately on finish.
-    return con
+    return db.connect()
 
 
-def require_group(con, code):
-    g = db.group_by_code(con, code)
-    if not g:
-        raise HTTPException(404, "group not found")
-    return g
-
-
-# --- auth: writes require a verified signed-in user; reads are open ---------
 def current_user(request: Request):
-    """Return {sub, email} for a valid bearer token, else None (no error)."""
     return auth.verify_token(auth.bearer(request))
 
 
-def require_user(request: Request, con=None):
-    """Gate a write. 401 if not signed in. Records the identity in `users`."""
+def require_user(request: Request):
     u = current_user(request)
     if not u:
         raise HTTPException(401, "sign in required")
-    if con is not None:
-        db.upsert_user(con, u["sub"], u.get("email"))
     return u
 
 
-def live_player_ids(con, group_id):
+def me_player(con, request):
+    """The signed-in user's player row (or None). player id == auth sub."""
+    u = current_user(request)
+    if not u:
+        return None, None
+    return u, db.get_player(con, u["sub"])
+
+
+def require_player(con, request):
+    u = require_user(request)
+    p = db.get_player(con, u["sub"])
+    if not p:
+        raise HTTPException(409, "set up your player first")
+    return u, p
+
+
+def _gid_from_query(con, request):
+    """Optional ?group=<code> -> group id, or None (= everything)."""
+    code = request.query_params.get("group")
+    if not code:
+        return None
+    g = db.group_by_code(con, code)
+    return g["id"] if g else None
+
+
+def _my_group_ids(con, pid):
+    return [g["id"] for g in db.groups_of_player(con, pid)]
+
+
+def live_player_ids(con):
     rows = con.execute(
         "SELECT DISTINCT mp.player_id FROM match_players mp JOIN matches m ON m.id=mp.match_id "
-        "WHERE m.group_id=? AND m.status='live' AND m.deleted=0", (group_id,)
-    ).fetchall()
+        "WHERE m.status='live'").fetchall()
     return {r["player_id"] for r in rows}
 
 
 def match_view(con, m):
-    """Serialize a match for JSON / templates (scoresheet, names, live point state)."""
     mid = m["id"]
     mps = db.match_players(con, mid)
     s1 = [{"id": r["player_id"], "name": r["name"], "real_name": r["real_name"]} for r in mps if r["side"] == 1]
@@ -120,14 +126,14 @@ def match_view(con, m):
     rot = [{"id": r["player_id"], "name": r["name"], "real_name": r["real_name"], "pos": r["rotation_pos"]}
            for r in mps if r["rotation_pos"]]
     rot.sort(key=lambda x: x["pos"])
-    v = {"id": mid, "kind": m["kind"], "status": m["status"], "played_on": m["played_on"],
-         "started_at": m["started_at"], "side1": s1, "side2": s2, "rotation": rot}
+    played_on = (m["finished_at"] or m["started_at"] or m["created_at"] or "")
+    v = {"id": mid, "kind": m["kind"], "status": m["status"], "played_on": played_on,
+         "started_at": m["started_at"], "group_id": m["group_id"],
+         "former_group_name": m["former_group_name"], "side1": s1, "side2": s2, "rotation": rot}
 
     if m["kind"] == "tt":
         games = db.tt_games(con, mid)
-        tally = {}
-        for r in rot:
-            tally[r["id"]] = 0
+        tally = {r["id"]: 0 for r in rot}
         for gm in games:
             if gm["winner_player_id"] in tally:
                 tally[gm["winner_player_id"]] += 1
@@ -143,14 +149,12 @@ def match_view(con, m):
         v["game_no"] = gi
         v["pairing"] = pairing
         v["tt_games"] = [{"server": gm["server_player_id"],
-                          "receiver": gm["receiver_player_id"] if "receiver_player_id" in gm.keys() else None,
-                          "winner": gm["winner_player_id"]} for gm in games]
+                          "receiver": gm["receiver_player_id"], "winner": gm["winner_player_id"]} for gm in games]
         return v
 
-    # singles/doubles: prefer point reconstruction when point logs exist
     pts = con.execute("SELECT winner_side FROM point_logs WHERE match_id=? ORDER BY seq", (mid,)).fetchall()
     if pts:
-        v["points"] = [p["winner_side"] for p in pts]      # raw sequence for client-engine hydrate
+        v["points"] = [p["winner_side"] for p in pts]
         sc = scoring.score_points([p["winner_side"] for p in pts])
         sets = list(sc["sets"])
         if sc["cur_games"] != (0, 0) or sc["points"] != (0, 0):
@@ -158,8 +162,7 @@ def match_view(con, m):
         v["per_point"] = True
         v["point_score"] = scoring.point_display(sc["points"], sc["is_tiebreak"])
         v["is_tiebreak"] = sc["is_tiebreak"]
-        s1_ids = [p["id"] for p in s1]
-        order = scoring._serve_order(s1_ids, [p["id"] for p in s2], m["kind"])
+        order = scoring._serve_order([p["id"] for p in s1], [p["id"] for p in s2], m["kind"])
         gi = len(sc["games"])
         server = (scoring.singles_server(order, gi) if m["kind"] == "singles"
                   else scoring.doubles_server(order, gi))
@@ -170,53 +173,20 @@ def match_view(con, m):
         v["per_point"] = False
         sets = [(s["games_side1"], s["games_side2"]) for s in db.match_sets(con, mid)]
     v["sets"] = [{"g1": a, "g2": b, "won1": a > b, "won2": b > a} for a, b in sets]
-    # winner (finished/rating states)
     if m["kind"] != "tt":
         result1, _ = ratings.match_outcome([(s["g1"], s["g2"]) for s in v["sets"]])
         v["winner_side"] = 1 if result1 == 1.0 else (2 if result1 == 0.0 else 0)
     return v
 
 
-def leaderboard_rows(con, group_id, mode, group_name=None):
-    st = db.rating_state(con, group_id)
-    live_ids = live_player_ids(con, group_id)
-    rows = []
-    for p in db.players_of(con, group_id):
-        n = st[mode + "_n"].get(p["id"], 0)
-        rows.append({
-            "id": p["id"], "name": p["name"], "real_name": p["real_name"],
-            "rating": round(st[mode].get(p["id"], START)),
-            "n": n, "provisional": n < ratings.MIN_MATCHES,
-            "live": p["id"] in live_ids,
-            "group": group_name,
-        })
-    return rows
-
-
-def ranked_and_provisional(rows):
-    ranked = sorted([r for r in rows if not r["provisional"]], key=lambda r: -r["rating"])
-    for i, r in enumerate(ranked, 1):
-        r["rank"] = i
-    prov = sorted([r for r in rows if r["provisional"]], key=lambda r: -r["rating"])
-    return ranked, prov
-
-
-def public_groups(con, exclude_id=None):
-    return [g for g in con.execute("SELECT * FROM groups WHERE is_public=1").fetchall()
-            if g["id"] != exclude_id]
-
-
 def win_prob_for(state, v):
-    """Win-probability per side: 2-way (singles/doubles) or 3-way (tt). Uses pair ratings
-    when both duos have 3+ pair matches, else averaged individual doubles ratings."""
     def avg(ids, mode):
         return sum(state[mode].get(i, START) for i in ids) / len(ids)
     if v["kind"] == "tt":
         rot = v.get("rotation", [])
         weights = [10 ** (state["singles"].get(r["id"], START) / 400.0) for r in rot]
         tot = sum(weights) or 1.0
-        return [{"label": r["name"], "pct": round(100 * weights[i] / tot)}
-                for i, r in enumerate(rot)]
+        return [{"label": r["name"], "pct": round(100 * weights[i] / tot)} for i, r in enumerate(rot)]
     s1 = [p["id"] for p in v["side1"]]
     s2 = [p["id"] for p in v["side2"]]
     n1 = " & ".join(p["name"] for p in v["side1"])
@@ -235,6 +205,34 @@ def win_prob_for(state, v):
     return [{"label": n1, "pct": pa}, {"label": n2, "pct": 100 - pa}]
 
 
+def _pblock(p):
+    return {"id": p["id"], "name": p["game_name"], "real_name": p["real_name"], "code": p["code"]}
+
+
+def leaderboard_rows(con, group_id, mode):
+    st = db.rating_state(con, group_id)
+    live_ids = live_player_ids(con)
+    if group_id:
+        players = db.members_of(con, group_id)
+    else:
+        players = con.execute("SELECT * FROM players ORDER BY LOWER(game_name)").fetchall()
+    rows = []
+    for p in players:
+        n = st[mode + "_n"].get(p["id"], 0)
+        rows.append({"id": p["id"], "name": p["game_name"], "real_name": p["real_name"],
+                     "rating": round(st[mode].get(p["id"], START)), "n": n,
+                     "provisional": n < ratings.MIN_MATCHES, "live": p["id"] in live_ids, "group": None})
+    return rows
+
+
+def ranked_and_provisional(rows):
+    ranked = sorted([r for r in rows if not r["provisional"]], key=lambda r: -r["rating"])
+    for i, r in enumerate(ranked, 1):
+        r["rank"] = i
+    prov = sorted([r for r in rows if r["provisional"]], key=lambda r: -r["rating"])
+    return ranked, prov
+
+
 # --- auth endpoints -------------------------------------------------------
 @app.get("/api/auth/config")
 def api_auth_config():
@@ -251,48 +249,27 @@ async def api_auth_email_start(request: Request):
 async def api_auth_email_verify(request: Request):
     d = await request.json()
     r = auth.verify_email_otp(d.get("email", ""), d.get("code", ""))
-    if "error" in r:
-        return JSONResponse(r, 401)
-    con = get_con()
-    u = auth.verify_token(r["token"])
-    db.upsert_user(con, u["sub"], u.get("email"))
-    con.close()
-    return r
+    return JSONResponse(r, 401) if "error" in r else r
 
 
 @app.post("/api/auth/google")
 async def api_auth_google(request: Request):
-    # Mock mode: instant deterministic sign-in. Supabase mode: real Google OAuth happens
-    # client-side; the browser then sends its token and the server just verifies it.
     if auth.AUTH_MODE != "mock":
         return JSONResponse({"error": "use client-side Google OAuth in supabase mode",
                              "config": auth.client_config()}, 400)
     d = await request.json()
-    r = auth.google_mock(d.get("email") or "tester@gmail.com")
-    con = get_con()
-    u = auth.verify_token(r["token"])
-    db.upsert_user(con, u["sub"], u.get("email"))
-    con.close()
-    return r
+    return auth.google_mock(d.get("email") or "tester@gmail.com")
 
 
 @app.post("/api/auth/guest")
 async def api_auth_guest(request: Request):
-    """Fallback (mock) mode only: sign in as a UNIQUE per-device identity. The browser
-    generates and stores a random device id and reuses it, so the same phone always returns
-    as the same account. Disabled when real Supabase auth is configured."""
     if auth.AUTH_MODE != "mock":
         return JSONResponse({"error": "guest sign-in is disabled"}, 400)
     d = await request.json()
     did = (d.get("device_id") or "").strip()
     if not did:
         return JSONResponse({"error": "device_id required"}, 400)
-    sub = "guest:" + did
-    token = auth.mint_mock_token(sub, None)
-    con = get_con()
-    db.upsert_user(con, sub, None)
-    con.close()
-    return {"token": token}
+    return {"token": auth.mint_mock_token("guest:" + did, None)}
 
 
 @app.get("/api/auth/me")
@@ -302,9 +279,6 @@ def api_auth_me(request: Request):
             "name": u.get("name") if u else None}
 
 
-# --- player-ID sign-in (Task 6). Public player code + password -> Supabase session. The email is
-#     resolved server-side ONLY and never returned. DEPLOY-GATED on the identity migration
-#     (players.code / auth_id / password_set applied to live Postgres via MCP). ------------------
 def _client_ip(request: Request) -> str:
     xff = request.headers.get("x-forwarded-for")
     return (xff.split(",")[0].strip() if xff else (request.client.host if request.client else "?"))
@@ -335,45 +309,97 @@ async def api_set_password(request: Request):
     return JSONResponse(body, status)
 
 
-# --- landing --------------------------------------------------------------
-@app.get("/", response_class=HTMLResponse)
-def landing(request: Request):
-    return templates.TemplateResponse(request, "landing.html", {})
-
-
-@app.post("/api/group/create")
-async def api_create_group(request: Request):
-    data = await request.json()
+# --- identity (global) ----------------------------------------------------
+@app.get("/api/me")
+def api_me(request: Request):
+    """Resolve the player from the auth token alone. First sign-in with no player -> needs_name."""
     con = get_con()
-    require_user(request, con)                 # group actions require sign-in
-    name = (data.get("name") or "").strip()
-    if not name:
+    u, p = me_player(con, request)
+    con.close()
+    if not u:
+        return {"signed_in": False, "player_id": None}
+    if not p:
+        return {"signed_in": True, "player_id": None, "needs_name": True,
+                "email": u.get("email"), "provider_name": u.get("name")}
+    return {"signed_in": True, "player_id": p["id"], "player_name": p["game_name"],
+            "player_real_name": p["real_name"], "code": p["code"], "email": u.get("email")}
+
+
+@app.post("/api/me/claim")
+async def api_me_claim(request: Request):
+    d = await _body(request)
+    con = get_con()
+    u = require_user(request)
+    if db.get_player(con, u["sub"]):
         con.close()
-        return JSONResponse({"error": "name required"}, 400)
-    gid, code = db.create_group(con, name)
+        return JSONResponse({"error": "you already have a player"}, 409)
+    try:
+        code = db.create_player(con, u["sub"], d.get("name", ""), d.get("real_name"))
+    except ValueError as e:
+        con.close()
+        return JSONResponse({"error": str(e)}, 400)
     con.close()
-    return {"code": code, "name": name}
+    return {"player_id": u["sub"], "code": code, "name": (d.get("name") or "").strip()}
 
 
-@app.post("/api/group/join")
-async def api_join_group(request: Request):
-    data = await request.json()
+@app.post("/api/me/rename")
+async def api_me_rename(request: Request):
+    d = await _body(request)
     con = get_con()
-    require_user(request, con)                 # joining a group requires sign-in
-    g = db.group_by_code(con, data.get("code", ""))
+    u, p = require_player(con, request)
+    try:
+        db.rename_player(con, p["id"], game_name=d.get("name"), real_name=d.get("real_name"))
+    except ValueError as e:
+        con.close()
+        return JSONResponse({"error": str(e)}, 409)
     con.close()
-    if not g:
-        return JSONResponse({"error": "no group with that code"}, 404)
-    return {"code": g["code"], "name": g["name"]}
+    return {"player_id": p["id"]}
 
 
-# --- SPA shell (one page; the JS router switches tabs client-side, no reload) --------
-def _shell(request, code, tab, player=None):
-    con = get_con()
-    g = require_group(con, code)
-    con.close()
+# --- SPA shell (served at `/`, `/<tab>`, `/g/<code>/<tab>` for a group filter, `/player/<id>`) ---
+def _shell(request, tab, group=None, player=None):
+    g = None
+    if group:
+        con = get_con()
+        g = db.group_by_code(con, group)
+        con.close()
     return templates.TemplateResponse(request, "shell.html",
-                                      {"g": dict(g), "code": code, "tab": tab, "player": player})
+                                      {"g": (dict(g) if g else None), "tab": tab, "player": player})
+
+
+@app.get("/", response_class=HTMLResponse)
+def home(request: Request):
+    return _shell(request, "live")
+
+
+@app.get("/live", response_class=HTMLResponse)
+def page_live0(request: Request):
+    return _shell(request, "live")
+
+
+@app.get("/leaderboard", response_class=HTMLResponse)
+def page_ranks0(request: Request):
+    return _shell(request, "leaderboard")
+
+
+@app.get("/log", response_class=HTMLResponse)
+def page_log0(request: Request):
+    return _shell(request, "log")
+
+
+@app.get("/groups", response_class=HTMLResponse)
+def page_groups0(request: Request):
+    return _shell(request, "groups")
+
+
+@app.get("/history", response_class=HTMLResponse)
+def page_history0(request: Request):
+    return _shell(request, "history")
+
+
+@app.get("/player/{pid}", response_class=HTMLResponse)
+def page_player0(request: Request, pid: str):
+    return _shell(request, "leaderboard", player=pid)
 
 
 @app.get("/g/{code}", response_class=HTMLResponse)
@@ -381,163 +407,14 @@ def group_home(code: str):
     return RedirectResponse(f"/g/{code}/live")
 
 
-@app.get("/g/{code}/live", response_class=HTMLResponse)
-def page_live(request: Request, code: str):
-    return _shell(request, code, "live")
+@app.get("/g/{code}/{tab}", response_class=HTMLResponse)
+def page_group_tab(request: Request, code: str, tab: str):
+    if tab not in ("live", "leaderboard", "log", "groups", "history"):
+        tab = "live"
+    return _shell(request, tab, group=code)
 
 
-@app.get("/g/{code}/leaderboard", response_class=HTMLResponse)
-def page_leaderboard(request: Request, code: str):
-    return _shell(request, code, "leaderboard")
-
-
-@app.get("/g/{code}/log", response_class=HTMLResponse)
-def page_log(request: Request, code: str):
-    return _shell(request, code, "log")
-
-
-@app.get("/g/{code}/groups", response_class=HTMLResponse)
-def page_groups(request: Request, code: str):
-    return _shell(request, code, "groups")
-
-
-@app.get("/g/{code}/history", response_class=HTMLResponse)
-def page_history(request: Request, code: str):
-    return _shell(request, code, "history")
-
-
-@app.get("/g/{code}/player/{pid}", response_class=HTMLResponse)
-def page_player(request: Request, code: str, pid: int):
-    return _shell(request, code, "leaderboard", player=pid)
-
-
-@app.get("/g/{code}/api/player/{pid}")
-def api_player(code: str, pid: int):
-    """Player-stats data for the in-app overlay (Task 4)."""
-    con = get_con()
-    g = require_group(con, code)
-    p = con.execute("SELECT id FROM players WHERE id=? AND group_id=?", (pid, g["id"])).fetchone()
-    if not p:
-        con.close()
-        raise HTTPException(404, "player not found")
-    data = player_payload(con, g, pid)
-    con.close()
-    return data
-
-
-# --- read JSON (polled every 3s by live views) ----------------------------
-@app.get("/g/{code}/api/live")
-def api_live(code: str):
-    con = get_con()
-    g = require_group(con, code)
-    live = con.execute("SELECT * FROM matches WHERE group_id=? AND status='live' AND deleted=0 "
-                       "ORDER BY id DESC", (g["id"],)).fetchall()
-    st = db.rating_state(con, g["id"])
-    mine = []
-    for m in live:
-        mv = match_view(con, m)
-        mv["win_prob"] = win_prob_for(st, mv)
-        mine.append(mv)
-    out = {"matches": mine, "public": []}
-    for pg in public_groups(con, exclude_id=g["id"]):
-        pm = con.execute("SELECT * FROM matches WHERE group_id=? AND status='live' AND deleted=0",
-                         (pg["id"],)).fetchall()
-        if pm:
-            pst = db.rating_state(con, pg["id"])
-            for m in pm:
-                mv = match_view(con, m)
-                mv["group"] = pg["name"]
-                mv["win_prob"] = win_prob_for(pst, mv)
-                out["public"].append(mv)
-    con.close()
-    return out
-
-
-@app.get("/g/{code}/api/meta")
-def api_meta(code: str):
-    """Picker data: players (0-based singles/doubles ratings + live flag) and pair ratings
-    (0-based + match count) for doubles chemistry. Ratings display = Elo - 1200."""
-    con = get_con()
-    g = require_group(con, code)
-    st = db.rating_state(con, g["id"])
-    live_ids = live_player_ids(con, g["id"])
-    players = []
-    for p in db.players_of(con, g["id"]):
-        players.append({
-            "id": p["id"], "name": p["name"], "real_name": p["real_name"], "live": p["id"] in live_ids,
-            "singles": round(st["singles"].get(p["id"], START)) - 1200,
-            "singles_n": st["singles_n"].get(p["id"], 0),
-            "doubles": round(st["doubles"].get(p["id"], START)) - 1200,
-            "doubles_n": st["doubles_n"].get(p["id"], 0),
-        })
-    pairs = {}
-    for (a, b), rating in st["pairs"].items():
-        pairs[f"{a}_{b}"] = {"rating": round(rating) - 1200, "n": st["pairs_n"][(a, b)]}
-    con.close()
-    return {"players": players, "pairs": pairs, "pair_provisional": ratings.PAIR_PROVISIONAL}
-
-
-@app.get("/g/{code}/api/match/{mid}")
-def api_match(code: str, mid: int):
-    con = get_con()
-    g = require_group(con, code)
-    m = db.match_row(con, mid)
-    if not m or m["group_id"] != g["id"]:
-        con.close()
-        raise HTTPException(404)
-    v = match_view(con, m)
-    con.close()
-    return v
-
-
-@app.get("/g/{code}/api/leaderboard")
-def api_leaderboard(code: str, scope: str = "group", mode: str = "singles"):
-    con = get_con()
-    g = require_group(con, code)
-    if scope == "everyone":
-        rows = []
-        for pg in public_groups(con):
-            rows += leaderboard_rows(con, pg["id"], mode, group_name=pg["name"])
-    else:
-        rows = leaderboard_rows(con, g["id"], mode)
-    ranked, prov = ranked_and_provisional(rows)
-    con.close()
-    return {"ranked": ranked, "provisional": prov, "scope": scope, "mode": mode}
-
-
-@app.get("/g/{code}/api/history")
-def api_history(code: str, scope: str = "group"):
-    con = get_con()
-    g = require_group(con, code)
-    if scope == "everyone":
-        gids = {g["id"]: None}                        # this group + all public groups
-        for pg in public_groups(con):
-            gids[pg["id"]] = pg["name"]
-        ph = ",".join("?" for _ in gids)
-        rows = con.execute(
-            f"SELECT * FROM matches WHERE group_id IN ({ph}) AND status='finished' AND deleted=0 "
-            "ORDER BY COALESCE(finished_at, created_at) DESC, id DESC", tuple(gids.keys())
-        ).fetchall()
-        tag_of = gids
-    else:
-        rows = con.execute(
-            "SELECT * FROM matches WHERE group_id=? AND status='finished' AND deleted=0 "
-            "ORDER BY COALESCE(finished_at, created_at) DESC, id DESC", (g["id"],)
-        ).fetchall()
-        tag_of = {}
-    done = []
-    for m in rows:
-        v = match_view(con, m)
-        v["voided"] = bool(m["voided"])
-        v["story"] = scoring.match_story(con, m["id"]) if v.get("per_point") else None
-        if tag_of.get(m["group_id"]):
-            v["group"] = tag_of[m["group_id"]]
-        done.append(v)
-    con.close()
-    return {"requests": [], "matches": done}
-
-
-# --- write actions (having the code = member) -----------------------------
+# --- reads (optional ?group=<code>) ---------------------------------------
 async def _body(request):
     try:
         return await request.json()
@@ -545,46 +422,175 @@ async def _body(request):
         return {}
 
 
-@app.post("/g/{code}/api/public")
-async def api_set_public(code: str, request: Request):
-    d = await _body(request)
+@app.get("/api/live")
+def api_live(request: Request):
     con = get_con()
-    require_user(request, con)
-    g = require_group(con, code)
-    db.set_public(con, g["id"], bool(d.get("is_public")))
+    gid = _gid_from_query(con, request)
+    u, p = me_player(con, request)
+    if gid:
+        rows = con.execute("SELECT * FROM matches WHERE status='live' AND group_id=? ORDER BY started_at DESC",
+                           (gid,)).fetchall()
+    elif p:
+        gids = _my_group_ids(con, p["id"])
+        ph = ",".join("?" for _ in gids)
+        q = ("SELECT DISTINCT m.* FROM matches m LEFT JOIN match_players mp ON mp.match_id=m.id "
+             "WHERE m.status='live' AND (mp.player_id=?" + (f" OR m.group_id IN ({ph})" if gids else "") + ") "
+             "ORDER BY m.started_at DESC")
+        rows = con.execute(q, tuple([p["id"]] + gids)).fetchall()
+    else:
+        rows = []
+    st = db.rating_state(con, gid)
+    mine = []
+    for m in rows:
+        mv = match_view(con, m)
+        mv["win_prob"] = win_prob_for(st, mv)
+        mine.append(mv)
     con.close()
-    return {"is_public": bool(d.get("is_public"))}
+    return {"matches": mine, "public": []}
 
 
-@app.post("/g/{code}/api/player")
-async def api_add_player(code: str, request: Request):
-    # v2: players are added by the admin only. Requires a valid admin key; the group app
-    # never sends it, so members get the note. The admin console adds players with the key.
-    key = request.headers.get("x-admin-key") or ""
-    if not key or key != ADMIN_KEY:
-        return JSONResponse({"error": "Players are added by the admin."}, 403)
-    d = await _body(request)
+@app.get("/api/meta")
+def api_meta(request: Request):
+    """Court-picker roster. With ?group= -> that group's members. Without -> the player + their
+    ACCEPTED friends only (the rule: the picker reads accepted friendships only)."""
     con = get_con()
-    g = require_group(con, code)
-    try:
-        pid = db.add_player(con, g["id"], d.get("name", ""), d.get("real_name"))
-    except ValueError as e:
+    gid = _gid_from_query(con, request)
+    u, p = me_player(con, request)
+    st = db.rating_state(con, gid)
+    live_ids = live_player_ids(con)
+    if gid:
+        roster = db.members_of(con, gid)
+    elif p:
+        roster = [p] + list(db.accepted_friends(con, p["id"]))
+    else:
+        roster = []
+    players = []
+    for pl in roster:
+        players.append({
+            "id": pl["id"], "name": pl["game_name"], "real_name": pl["real_name"],
+            "live": pl["id"] in live_ids,
+            "singles": round(st["singles"].get(pl["id"], START)) - 1200,
+            "singles_n": st["singles_n"].get(pl["id"], 0),
+            "doubles": round(st["doubles"].get(pl["id"], START)) - 1200,
+            "doubles_n": st["doubles_n"].get(pl["id"], 0),
+        })
+    pairs = {f"{a}_{b}": {"rating": round(r) - 1200, "n": st["pairs_n"][(a, b)]}
+             for (a, b), r in st["pairs"].items()}
+    con.close()
+    return {"players": players, "pairs": pairs, "pair_provisional": ratings.PAIR_PROVISIONAL}
+
+
+@app.get("/api/leaderboard")
+def api_leaderboard(request: Request, mode: str = "singles"):
+    con = get_con()
+    gid = _gid_from_query(con, request)
+    ranked, prov = ranked_and_provisional(leaderboard_rows(con, gid, mode))
+    con.close()
+    return {"ranked": ranked, "provisional": prov, "scope": "group" if gid else "everyone", "mode": mode}
+
+
+@app.get("/api/history")
+def api_history(request: Request):
+    con = get_con()
+    gid = _gid_from_query(con, request)
+    u, p = me_player(con, request)
+    shown = "('counted','pending_approval','disputed')"
+    if gid:
+        rows = con.execute(f"SELECT * FROM matches WHERE group_id=? AND status IN {shown} "
+                           "ORDER BY COALESCE(finished_at, created_at) DESC, id DESC", (gid,)).fetchall()
+    elif p:
+        rows = con.execute(
+            f"SELECT DISTINCT m.* FROM matches m JOIN match_players mp ON mp.match_id=m.id "
+            f"WHERE mp.player_id=? AND m.status IN {shown} "
+            "ORDER BY COALESCE(m.finished_at, m.created_at) DESC, m.id DESC", (p["id"],)).fetchall()
+    else:
+        rows = []
+    done = []
+    for m in rows:
+        v = match_view(con, m)
+        v["story"] = scoring.match_story(con, m["id"]) if v.get("per_point") else None
+        if m["former_group_name"]:
+            v["group"] = m["former_group_name"]
+        done.append(v)
+    con.close()
+    return {"requests": [], "matches": done}
+
+
+@app.get("/api/match/{mid}")
+def api_match(mid: str):
+    con = get_con()
+    m = db.match_row(con, mid)
+    if not m:
         con.close()
-        return JSONResponse({"error": str(e)}, 400)
-    db.log_admin(con, "player.add", f"gid={g['id']} name={d.get('name','').strip()}")
+        raise HTTPException(404)
+    v = match_view(con, m)
     con.close()
-    return {"id": pid, "name": d["name"].strip()}
+    return v
 
 
-@app.post("/g/{code}/api/match/start")
-async def api_start(code: str, request: Request):
+@app.get("/api/player/{pid}")
+def api_player(pid: str, request: Request):
+    con = get_con()
+    gid = _gid_from_query(con, request)
+    if not db.get_player(con, pid):
+        con.close()
+        raise HTTPException(404, "player not found")
+    data = player_payload(con, gid, pid)
+    con.close()
+    return data
+
+
+def player_payload(con, gid, pid):
+    st = db.rating_state(con, gid)
+    p = db.get_player(con, pid)
+    live_ids = live_player_ids(con)
+    names = {r["id"]: r["game_name"] for r in con.execute("SELECT id, game_name FROM players").fetchall()}
+    pairs = []
+    for (a, b), rating in st["pairs"].items():
+        if pid in (a, b):
+            partner = b if a == pid else a
+            n = st["pairs_n"][(a, b)]
+            pairs.append({"partner": names.get(partner, "?"), "rating": round(rating), "n": n,
+                          "provisional": n < ratings.PAIR_PROVISIONAL})
+    hist, last5, wins, losses = [], [], 0, 0
+    where_g = "AND m.group_id=?" if gid else ""
+    params = [pid] + ([gid] if gid else [])
+    ms = con.execute(
+        f"SELECT m.* FROM matches m JOIN match_players mp ON mp.match_id=m.id "
+        f"WHERE mp.player_id=? AND m.status='counted' {where_g} "
+        "ORDER BY COALESCE(m.finished_at,m.created_at) DESC, m.id DESC", tuple(params)).fetchall()
+    for m in ms:
+        v = match_view(con, m)
+        if m["kind"] != "tt":
+            won = v.get("winner_side") == (1 if pid in [x["id"] for x in v["side1"]] else 2)
+        else:
+            tally = {t["id"]: t["wins"] for t in v["tally"]}
+            best = max(tally.values()) if tally else 0
+            won = tally.get(pid, 0) == best and best > 0
+        wins, losses = (wins + 1, losses) if won else (wins, losses + 1)
+        if len(last5) < 5:
+            last5.append("W" if won else "L")
+        hist.append(v)
+    return {"id": pid, "name": p["game_name"], "real_name": p["real_name"],
+            "singles": round(st["singles"].get(pid, START)), "singles_n": st["singles_n"].get(pid, 0),
+            "singles_prov": st["singles_n"].get(pid, 0) < ratings.MIN_MATCHES,
+            "doubles": round(st["doubles"].get(pid, START)), "doubles_n": st["doubles_n"].get(pid, 0),
+            "doubles_prov": st["doubles_n"].get(pid, 0) < ratings.MIN_MATCHES,
+            "pairs": pairs, "wins": wins, "losses": losses, "last5": last5,
+            "live": pid in live_ids, "matches": hist,
+            "serve": scoring.serve_return_stats(con, gid, pid)}
+
+
+# --- scoring writes (player id = the signed-in user) ----------------------
+@app.post("/api/match/start")
+async def api_start(request: Request):
     d = await _body(request)
     con = get_con()
-    require_user(request, con)
-    g = require_group(con, code)
+    u, p = require_player(con, request)
+    gid = _gid_from_query(con, request) or (db.group_by_code(con, d["group"])["id"] if d.get("group") else None)
     try:
-        mid = logic.start_match(con, g["id"], d["kind"], d.get("side1", []), d.get("side2", []),
-                                d.get("rotation", []), d.get("logger"))
+        mid = logic.start_match(con, gid, d["kind"], d.get("side1", []), d.get("side2", []),
+                                d.get("rotation", []), p["id"])
     except ValueError as e:
         con.close()
         return JSONResponse({"error": str(e)}, 400)
@@ -592,16 +598,15 @@ async def api_start(code: str, request: Request):
     return {"id": mid}
 
 
-@app.post("/g/{code}/api/played")
-async def api_played(code: str, request: Request):
+@app.post("/api/played")
+async def api_played(request: Request):
     d = await _body(request)
     con = get_con()
-    require_user(request, con)
-    g = require_group(con, code)
+    u, p = require_player(con, request)
+    gid = db.group_by_code(con, d["group"])["id"] if d.get("group") else None
     try:
-        mid = logic.save_played(con, g["id"], d["kind"], d.get("side1", []), d.get("side2", []),
-                                d.get("rotation", []), d.get("sets", []), d.get("logger"),
-                                d.get("played_on"))
+        mid = logic.save_played(con, gid, d["kind"], d.get("side1", []), d.get("side2", []),
+                                d.get("rotation", []), d.get("sets", []), p["id"], d.get("played_on"))
     except ValueError as e:
         con.close()
         return JSONResponse({"error": str(e)}, 400)
@@ -609,30 +614,27 @@ async def api_played(code: str, request: Request):
     return {"id": mid}
 
 
-@app.post("/g/{code}/api/match/{mid}/sets")
-async def api_sets(code: str, mid: int, request: Request):
+@app.post("/api/match/{mid}/sets")
+async def api_sets(mid: str, request: Request):
     d = await _body(request)
     con = get_con()
-    require_user(request, con)
-    require_group(con, code)
+    require_player(con, request)
     try:
         logic.edit_sets(con, mid, [(int(a), int(b)) for a, b in d.get("sets", [])])
     except ValueError as e:
         con.close()
         return JSONResponse({"error": str(e)}, 400)
-    # grid becomes the source of truth: drop any per-point log so the two don't fight
     con.execute("DELETE FROM point_logs WHERE match_id=?", (mid,))
     con.commit()
     con.close()
     return {"ok": True}
 
 
-@app.post("/g/{code}/api/match/{mid}/point")
-async def api_point(code: str, mid: int, request: Request):
+@app.post("/api/match/{mid}/point")
+async def api_point(mid: str, request: Request):
     d = await _body(request)
     con = get_con()
-    require_user(request, con)
-    require_group(con, code)
+    require_player(con, request)
     logic.log_point(con, mid, int(d["winner_side"]), d.get("server"))
     pts = con.execute("SELECT winner_side FROM point_logs WHERE match_id=? ORDER BY seq", (mid,)).fetchall()
     logic._write_sets(con, mid, scoring.all_sets_for_storage([p["winner_side"] for p in pts]))
@@ -641,15 +643,11 @@ async def api_point(code: str, mid: int, request: Request):
     return v
 
 
-@app.post("/g/{code}/api/match/{mid}/point/undo")
-async def api_point_undo(code: str, mid: int, request: Request):
+@app.post("/api/match/{mid}/point/undo")
+async def api_point_undo(mid: str, request: Request):
     con = get_con()
-    require_user(request, con)
-    require_group(con, code)
-    row = con.execute("SELECT MAX(seq) s FROM point_logs WHERE match_id=?", (mid,)).fetchone()
-    if row and row["s"]:
-        con.execute("DELETE FROM point_logs WHERE match_id=? AND seq=?", (mid, row["s"]))
-        con.commit()
+    require_player(con, request)
+    logic.undo_point(con, mid)
     pts = con.execute("SELECT winner_side FROM point_logs WHERE match_id=? ORDER BY seq", (mid,)).fetchall()
     logic._write_sets(con, mid, scoring.all_sets_for_storage([p["winner_side"] for p in pts]))
     v = match_view(con, db.match_row(con, mid))
@@ -657,52 +655,47 @@ async def api_point_undo(code: str, mid: int, request: Request):
     return v
 
 
-@app.post("/g/{code}/api/match/{mid}/tt")
-async def api_tt(code: str, mid: int, request: Request):
+@app.post("/api/match/{mid}/tt")
+async def api_tt(mid: str, request: Request):
     d = await _body(request)
     con = get_con()
-    require_user(request, con)
-    require_group(con, code)
-    logic.log_tt_game(con, mid, d.get("server"), int(d["winner"]), d.get("receiver"))
+    require_player(con, request)
+    logic.log_tt_game(con, mid, d.get("server"), d["winner"], d.get("receiver"))
     v = match_view(con, db.match_row(con, mid))
     con.close()
     return v
 
 
-@app.post("/g/{code}/api/match/{mid}/tt/undo")
-async def api_tt_undo(code: str, mid: int, request: Request):
+@app.post("/api/match/{mid}/tt/undo")
+async def api_tt_undo(mid: str, request: Request):
     con = get_con()
-    require_user(request, con)
-    require_group(con, code)
+    require_player(con, request)
     logic.undo_tt_game(con, mid)
     v = match_view(con, db.match_row(con, mid))
     con.close()
     return v
 
 
-@app.post("/g/{code}/api/match/{mid}/date")
-async def api_match_date(code: str, mid: int, request: Request):
-    """History inline date/time edit (member action)."""
+@app.post("/api/match/{mid}/date")
+async def api_match_date(mid: str, request: Request):
     d = await _body(request)
     con = get_con()
-    require_user(request, con)
-    require_group(con, code)
+    require_player(con, request)
     played = (d.get("played_on") or "").strip()
     if played:
-        con.execute("UPDATE matches SET played_on=? WHERE id=?", (played, mid))
+        con.execute("UPDATE matches SET finished_at=? WHERE id=?", (played, mid))
         con.commit()
     con.close()
     return {"ok": True}
 
 
-@app.post("/g/{code}/api/match/{mid}/finish")
-async def api_finish(code: str, mid: int, request: Request):
+@app.post("/api/match/{mid}/finish")
+async def api_finish(mid: str, request: Request):
     await _body(request)
     con = get_con()
-    require_user(request, con)
-    require_group(con, code)
+    require_player(con, request)
     try:
-        logic.finish_match(con, mid)   # v2: finished + rated immediately
+        logic.finish_match(con, mid)
     except ValueError as e:
         con.close()
         return JSONResponse({"error": str(e)}, 400)
@@ -711,14 +704,13 @@ async def api_finish(code: str, mid: int, request: Request):
     return {"status": status}
 
 
-@app.post("/g/{code}/api/match/{mid}/delete")
-async def api_delete(code: str, mid: int, request: Request):
+@app.post("/api/match/{mid}/delete")
+async def api_delete(mid: str, request: Request):
     await _body(request)
     con = get_con()
-    require_user(request, con)
-    require_group(con, code)
+    require_player(con, request)
     try:
-        res = logic.delete_match(con, mid)   # v2: immediate soft-delete
+        res = logic.delete_match(con, mid)
     except ValueError as e:
         con.close()
         return JSONResponse({"error": str(e)}, 400)
@@ -726,422 +718,303 @@ async def api_delete(code: str, mid: int, request: Request):
     return {"result": res}
 
 
-# --- identity <-> player linking (per group) ------------------------------
-@app.get("/g/{code}/api/me")
-def api_group_me(code: str, request: Request):
-    """Who am I in this group? Group name is only revealed to signed-in users of a private
-    group (public groups render their name in the page shell already)."""
+# --- approvals / freeze / resume (participant actions) --------------------
+def _require_participant(con, request, mid):
+    u, p = require_player(con, request)
+    if p["id"] not in db.participants(con, mid):
+        raise HTTPException(403, "not a participant")
+    return p
+
+
+@app.post("/api/match/{mid}/approve")
+async def api_approve(mid: str, request: Request):
     con = get_con()
-    g = require_group(con, code)
-    u = current_user(request)
-    if not u:
-        con.close()
-        return {"signed_in": False, "player_id": None}
-    pid = db.get_link(con, g["id"], u["sub"])
-    name = real_name = None
-    if pid:
-        row = con.execute("SELECT name, real_name FROM players WHERE id=?", (pid,)).fetchone()
-        if row:
-            name, real_name = row["name"], row["real_name"]
+    p = _require_participant(con, request, mid)
+    logic.approve(con, mid, p["id"])
+    st = db.match_row(con, mid)["status"]
     con.close()
-    return {"signed_in": True, "email": u.get("email"), "player_id": pid,
-            "player_name": name, "player_real_name": real_name,
-            "provider_name": u.get("name"), "group_name": g["name"]}
+    return {"status": st}
 
 
-@app.post("/g/{code}/api/link")
-async def api_group_link(code: str, request: Request):
-    """Claim an EXISTING player (secondary path). Locked once set."""
+@app.post("/api/match/{mid}/unapprove")
+async def api_unapprove(mid: str, request: Request):
+    con = get_con()
+    p = _require_participant(con, request, mid)
+    logic.unapprove(con, mid, p["id"])
+    st = db.match_row(con, mid)["status"]
+    con.close()
+    return {"status": st}
+
+
+@app.post("/api/match/{mid}/dispute")
+async def api_dispute(mid: str, request: Request):
     d = await _body(request)
     con = get_con()
-    u = require_user(request, con)
-    g = require_group(con, code)
-    p = con.execute("SELECT id FROM players WHERE id=? AND group_id=?",
-                    (d.get("player_id"), g["id"])).fetchone()
+    p = _require_participant(con, request, mid)
+    logic.dispute(con, mid, p["id"], d.get("reason"))
+    st = db.match_row(con, mid)["status"]
+    con.close()
+    return {"status": st}
+
+
+@app.post("/api/match/{mid}/freeze")
+async def api_freeze(mid: str, request: Request):
+    con = get_con()
+    p = _require_participant(con, request, mid)
+    logic.freeze_request(con, mid, p["id"])
+    st = db.match_row(con, mid)["status"]
+    con.close()
+    return {"status": st}
+
+
+@app.post("/api/match/{mid}/resume")
+async def api_resume(mid: str, request: Request):
+    con = get_con()
+    p = _require_participant(con, request, mid)
+    logic.resume_request(con, mid, p["id"])
+    st = db.match_row(con, mid)["status"]
+    con.close()
+    return {"status": st}
+
+
+# --- friends --------------------------------------------------------------
+@app.get("/api/friends")
+def api_friends(request: Request):
+    con = get_con()
+    u, p = me_player(con, request)
     if not p:
         con.close()
-        return JSONResponse({"error": "unknown player"}, 400)
-    try:
-        db.set_link(con, g["id"], u["sub"], p["id"])
-    except ValueError as e:
-        con.close()
-        return JSONResponse({"error": str(e)}, 409)   # already linked (locked)
+        return {"friends": [], "pending": []}
+    friends = [_pblock(x) for x in db.accepted_friends(con, p["id"])]
+    pending = [_pblock(x) for x in db.pending_friend_requests(con, p["id"])]
     con.close()
-    return {"player_id": p["id"]}
+    return {"friends": friends, "pending": pending}
 
 
-@app.post("/g/{code}/api/claim-name")
-async def api_claim_name(code: str, request: Request):
-    """Self-serve onboarding: game name (required, unique) + real name (optional). Creates a
-    NEW player and links it to this account. The group code is the only gate."""
+@app.post("/api/friend/request")
+async def api_friend_request(request: Request):
     d = await _body(request)
     con = get_con()
-    u = require_user(request, con)
-    g = require_group(con, code)
-    if db.get_link(con, g["id"], u["sub"]) is not None:
+    u, p = require_player(con, request)
+    other = db.get_player_by_code(con, d.get("code", "")) if d.get("code") else db.get_player(con, d.get("id"))
+    if not other:
         con.close()
-        return JSONResponse({"error": "you already have a name in this group"}, 409)
-    name = (d.get("name") or "").strip()
-    if not name:
-        con.close()
-        return JSONResponse({"error": "please enter a game name"}, 400)
+        return JSONResponse({"error": "no such player"}, 404)
     try:
-        pid = db.add_player(con, g["id"], name, d.get("real_name"))
-    except ValueError:
-        con.close()
-        return JSONResponse({"error": "that game name is taken in this group — try another"}, 409)
-    db.set_link(con, g["id"], u["sub"], pid)
-    con.close()
-    return {"player_id": pid, "name": name}
-
-
-@app.post("/g/{code}/api/rename-me")
-async def api_rename_me(code: str, request: Request):
-    """Change your OWN game name and/or real name, any time (Task 1 — no admin approval)."""
-    d = await _body(request)
-    con = get_con()
-    u = require_user(request, con)
-    g = require_group(con, code)
-    pid = db.get_link(con, g["id"], u["sub"])
-    if not pid:
-        con.close()
-        return JSONResponse({"error": "you have no player in this group yet"}, 400)
-    try:
-        db.rename_player(con, pid, name=d.get("name"), real_name=d.get("real_name"))
+        state = db.request_friend(con, p["id"], other["id"])
     except ValueError as e:
         con.close()
-        return JSONResponse({"error": str(e)}, 409)
+        return JSONResponse({"error": str(e)}, 400)
     con.close()
-    return {"player_id": pid}
+    return {"status": state}
 
 
-# --- player page payload --------------------------------------------------
-def player_payload(con, g, pid):
-    st = db.rating_state(con, g["id"])
-    p = con.execute("SELECT * FROM players WHERE id=?", (pid,)).fetchone()
-    live_ids = live_player_ids(con, g["id"])
-    # pair ratings for this player
-    pairs = []
-    names = {r["id"]: r["name"] for r in db.players_of(con, g["id"])}
-    for (a, b), rating in st["pairs"].items():
-        if pid in (a, b):
-            partner = b if a == pid else a
-            n = st["pairs_n"][(a, b)]
-            pairs.append({"partner": names.get(partner, "?"), "rating": round(rating),
-                          "n": n, "provisional": n < ratings.PAIR_PROVISIONAL})
-    # match history + last5
-    hist = []
-    last5 = []
-    ms = con.execute(
-        "SELECT m.* FROM matches m JOIN match_players mp ON mp.match_id=m.id "
-        "WHERE mp.player_id=? AND m.status='finished' AND m.voided=0 AND m.deleted=0 "
-        "ORDER BY COALESCE(m.finished_at,m.created_at) DESC, m.id DESC", (pid,)
-    ).fetchall()
-    wins = losses = 0
-    for m in ms:
-        v = match_view(con, m)
-        if m["kind"] != "tt":
-            s1_ids = [x["id"] for x in v["side1"]]
-            my_side = 1 if pid in s1_ids else 2
-            won = v.get("winner_side") == my_side
-        else:
-            tally = {t["id"]: t["wins"] for t in v["tally"]}
-            best = max(tally.values()) if tally else 0
-            won = tally.get(pid, 0) == best and best > 0
-        if won:
-            wins += 1
-        else:
-            losses += 1
-        if len(last5) < 5:
-            last5.append("W" if won else "L")
-        hist.append(v)
-    return {
-        "id": pid, "name": p["name"], "real_name": p["real_name"],
-        "singles": round(st["singles"].get(pid, START)),
-        "singles_n": st["singles_n"].get(pid, 0),
-        "singles_prov": st["singles_n"].get(pid, 0) < ratings.MIN_MATCHES,
-        "doubles": round(st["doubles"].get(pid, START)),
-        "doubles_n": st["doubles_n"].get(pid, 0),
-        "doubles_prov": st["doubles_n"].get(pid, 0) < ratings.MIN_MATCHES,
-        "pairs": pairs, "wins": wins, "losses": losses, "last5": last5,
-        "live": pid in live_ids, "matches": hist,
-        "serve": scoring.serve_return_stats(con, g["id"], pid),
-    }
-
-
-@app.get("/api/global/leaderboard")
-def api_global_leaderboard(mode: str = "singles"):
+@app.post("/api/friend/accept")
+async def api_friend_accept(request: Request):
+    d = await _body(request)
     con = get_con()
-    rows = []
-    for pg in public_groups(con):
-        rows += leaderboard_rows(con, pg["id"], mode, group_name=pg["name"])
-    ranked, prov = ranked_and_provisional(rows)
-    con.close()
-    return {"ranked": ranked, "provisional": prov}
-
-
-# ==========================================================================
-# ADMIN GOD-MODE — one secret key, no link anywhere in the user-facing app.
-# ==========================================================================
-def require_admin(request: Request):
-    """Gate every admin endpoint. Wrong/missing key -> generic 404 (reveals nothing)."""
-    key = request.headers.get("x-admin-key") or request.query_params.get("key") or ""
-    if not key or key != ADMIN_KEY:
-        raise HTTPException(404, "Not Found")
-
-
-async def _admin_body(request: Request):
-    require_admin(request)
-    try:
-        return await request.json()
-    except Exception:
-        return {}
-
-
-@app.get("/admin", response_class=HTMLResponse)
-def admin_page(request: Request):
-    # The shell is inert without the key; all data endpoints enforce it.
-    return templates.TemplateResponse(request, "admin.html", {})
-
-
-def _group_card(con, g):
-    gid = g["id"]
-    players = con.execute("SELECT COUNT(*) c FROM players WHERE group_id=?", (gid,)).fetchone()["c"]
-    matches = con.execute("SELECT COUNT(*) c FROM matches WHERE group_id=? AND deleted=0", (gid,)).fetchone()["c"]
-    live = con.execute("SELECT COUNT(*) c FROM matches WHERE group_id=? AND status='live' AND deleted=0", (gid,)).fetchone()["c"]
-    last = con.execute(
-        "SELECT MAX(COALESCE(finished_at, started_at, created_at)) t FROM matches WHERE group_id=?",
-        (gid,)).fetchone()["t"]
-    return {"id": gid, "name": g["name"], "code": g["code"], "is_public": bool(g["is_public"]),
-            "players": players, "matches": matches, "live": live,
-            "created_at": g["created_at"], "last_activity": last}
-
-
-@app.get("/admin/api/dashboard")
-def admin_dashboard(request: Request):
-    require_admin(request)
-    con = get_con()
-    groups = [_group_card(con, g) for g in db.all_groups(con)]
-    totals = {
-        "groups": con.execute("SELECT COUNT(*) c FROM groups").fetchone()["c"],
-        "players": con.execute("SELECT COUNT(*) c FROM players").fetchone()["c"],
-        "matches": con.execute("SELECT COUNT(*) c FROM matches WHERE deleted=0").fetchone()["c"],
-        "live": con.execute("SELECT COUNT(*) c FROM matches WHERE status='live' AND deleted=0").fetchone()["c"],
-    }
-    logs = [{"at": r["at"], "action": r["action"], "target": r["target"]} for r in db.admin_logs(con)]
-    con.close()
-    return {"totals": totals, "groups": groups, "log": logs}
-
-
-@app.get("/admin/api/group/{gid}")
-def admin_group_detail(request: Request, gid: int):
-    require_admin(request)
-    con = get_con()
-    g = db.group_by_id(con, gid)
-    if not g:
-        con.close()
-        raise HTTPException(404, "Not Found")
-    players = [{"id": p["id"], "name": p["name"], "real_name": p["real_name"]} for p in db.players_of(con, gid)]
-    ms = con.execute(
-        "SELECT * FROM matches WHERE group_id=? ORDER BY COALESCE(finished_at, created_at) DESC, id DESC",
-        (gid,)).fetchall()
-    matches = []
-    for m in ms:
-        v = match_view(con, m)
-        v["voided"] = bool(m["voided"])
-        v["deleted"] = bool(m["deleted"])
-        matches.append(v)
-    links = [{"auth_sub": r["auth_sub"], "email": r["email"],
-              "player_id": r["player_id"], "player_name": r["name"]}
-             for r in db.links_of_group(con, gid)]
-    card = _group_card(con, g)
-    con.close()
-    return {"group": card, "players": players, "matches": matches, "links": links}
-
-
-def _admin_ok(con, action, target):
-    db.log_admin(con, action, target)
+    u, p = require_player(con, request)
+    db.accept_friend(con, p["id"], d.get("id"))
     con.close()
     return {"ok": True}
 
 
-@app.post("/admin/api/group/create")
-async def admin_group_create(request: Request):
-    d = await _admin_body(request)
+@app.post("/api/friend/decline")
+async def api_friend_decline(request: Request):
+    d = await _body(request)
+    con = get_con()
+    u, p = require_player(con, request)
+    db.decline_friend(con, p["id"], d.get("id"))
+    con.close()
+    return {"ok": True}
+
+
+@app.get("/api/players/search")
+def api_players_search(request: Request, q: str = ""):
+    con = get_con()
+    rows = [_pblock(x) for x in db.search_players(con, q)]
+    con.close()
+    return {"players": rows}
+
+
+# --- groups ---------------------------------------------------------------
+@app.get("/api/groups")
+def api_groups(request: Request):
+    con = get_con()
+    u, p = me_player(con, request)
+    if not p:
+        con.close()
+        return {"groups": []}
+    out = []
+    for g in db.groups_of_player(con, p["id"]):
+        out.append({"id": g["id"], "name": g["name"], "code": g["code"],
+                    "is_public": bool(g["is_public"]), "is_admin": g["admin_id"] == p["id"]})
+    con.close()
+    return {"groups": out}
+
+
+@app.post("/api/group/create")
+async def api_group_create(request: Request):
+    d = await _body(request)
+    con = get_con()
+    u, p = require_player(con, request)
     name = (d.get("name") or "").strip()
     if not name:
+        con.close()
         return JSONResponse({"error": "name required"}, 400)
-    con = get_con()
-    gid, code = db.create_group(con, name)
-    db.log_admin(con, "group.create", f"{name} [{code}]")
+    gid, code = db.create_group(con, name, p["id"])
     con.close()
     return {"id": gid, "code": code, "name": name}
 
 
-@app.post("/admin/api/group/{gid}/public")
-async def admin_group_public(request: Request, gid: int):
-    d = await _admin_body(request)
+@app.post("/api/group/join")
+async def api_group_join(request: Request):
+    d = await _body(request)
     con = get_con()
-    db.set_public(con, gid, bool(d.get("is_public")))
-    return _admin_ok(con, "group.public", f"gid={gid} -> {bool(d.get('is_public'))}")
-
-
-@app.post("/admin/api/group/{gid}/regen")
-async def admin_group_regen(request: Request, gid: int):
-    await _admin_body(request)
-    con = get_con()
-    g = db.group_by_id(con, gid)
+    u, p = require_player(con, request)
+    g = db.group_by_code(con, d.get("code", ""))
     if not g:
         con.close()
-        raise HTTPException(404, "Not Found")
-    old = g["code"]
-    code = db.regen_code(con, gid)
-    db.log_admin(con, "group.regen_code", f"gid={gid} {old} -> {code}")
+        return JSONResponse({"error": "no group with that code"}, 404)
+    if g["is_public"]:
+        db.add_member(con, g["id"], p["id"])
+        con.close()
+        return {"joined": True, "code": g["code"], "name": g["name"]}
+    db.add_join_request(con, g["id"], p["id"])
     con.close()
-    return {"code": code}
+    return {"joined": False, "requested": True, "name": g["name"]}
 
 
-@app.post("/admin/api/group/{gid}/rename")
-async def admin_group_rename(request: Request, gid: int):
-    d = await _admin_body(request)
+def _require_group_admin(con, request, gid):
+    u, p = require_player(con, request)
+    g = db.group_by_id(con, gid)
+    if not g:
+        raise HTTPException(404, "group not found")
+    if g["admin_id"] != p["id"]:
+        raise HTTPException(403, "only the group admin can do that")
+    return p, g
+
+
+@app.post("/api/group/{gid}/public")
+async def api_group_public(gid: str, request: Request):
+    d = await _body(request)
     con = get_con()
+    _require_group_admin(con, request, gid)
+    db.set_public(con, gid, bool(d.get("is_public")))
+    con.close()
+    return {"is_public": bool(d.get("is_public"))}
+
+
+@app.post("/api/group/{gid}/rename")
+async def api_group_rename(gid: str, request: Request):
+    d = await _body(request)
+    con = get_con()
+    _require_group_admin(con, request, gid)
     try:
         db.rename_group(con, gid, d.get("name", ""))
     except ValueError as e:
         con.close()
         return JSONResponse({"error": str(e)}, 400)
-    return _admin_ok(con, "group.rename", f"gid={gid} -> {d.get('name')}")
+    con.close()
+    return {"ok": True}
 
 
-@app.post("/admin/api/group/{gid}/delete")
-async def admin_group_delete(request: Request, gid: int):
-    d = await _admin_body(request)
+@app.post("/api/group/{gid}/code")
+async def api_group_code(gid: str, request: Request):
     con = get_con()
-    g = db.group_by_id(con, gid)
-    if not g:
-        con.close()
+    _require_group_admin(con, request, gid)
+    code = db.regen_group_code(con, gid)
+    con.close()
+    return {"code": code}
+
+
+@app.post("/api/group/{gid}/admin")
+async def api_group_admin(gid: str, request: Request):
+    d = await _body(request)
+    con = get_con()
+    _require_group_admin(con, request, gid)
+    db.set_admin(con, gid, d.get("player_id"))
+    con.close()
+    return {"ok": True}
+
+
+@app.post("/api/group/{gid}/remove")
+async def api_group_remove(gid: str, request: Request):
+    d = await _body(request)
+    con = get_con()
+    _require_group_admin(con, request, gid)
+    db.remove_member(con, gid, d.get("player_id"))
+    con.close()
+    return {"ok": True}
+
+
+@app.post("/api/group/{gid}/delete")
+async def api_group_delete(gid: str, request: Request):
+    con = get_con()
+    _require_group_admin(con, request, gid)
+    db.delete_group(con, gid)     # matches kept (group_id -> NULL, former_group_name)
+    con.close()
+    return {"ok": True}
+
+
+@app.get("/api/group/{gid}/requests")
+def api_group_requests(gid: str, request: Request):
+    con = get_con()
+    _require_group_admin(con, request, gid)
+    reqs = [_pblock(x) for x in db.join_requests_of(con, gid)]
+    con.close()
+    return {"requests": reqs}
+
+
+@app.post("/api/group/{gid}/approve")
+async def api_group_approve(gid: str, request: Request):
+    d = await _body(request)
+    con = get_con()
+    _require_group_admin(con, request, gid)
+    db.add_member(con, gid, d.get("player_id"))
+    db.clear_join_request(con, gid, d.get("player_id"))
+    con.close()
+    return {"ok": True}
+
+
+@app.post("/api/group/{gid}/decline")
+async def api_group_decline(gid: str, request: Request):
+    d = await _body(request)
+    con = get_con()
+    _require_group_admin(con, request, gid)
+    db.clear_join_request(con, gid, d.get("player_id"))
+    con.close()
+    return {"ok": True}
+
+
+# --- admin god-mode -------------------------------------------------------
+def require_admin(request: Request):
+    key = request.headers.get("x-admin-key") or request.query_params.get("key") or ""
+    if not key or key != ADMIN_KEY:
         raise HTTPException(404, "Not Found")
-    if (d.get("confirm") or "").strip() != g["name"]:
-        con.close()
-        return JSONResponse({"error": "type the exact group name to confirm"}, 400)
-    db.delete_group(con, gid)
-    return _admin_ok(con, "group.delete", f"gid={gid} [{g['name']}]")
 
 
-@app.post("/admin/api/player/{pid}/rename")
-async def admin_player_rename(request: Request, pid: int):
-    d = await _admin_body(request)
+@app.get("/admin", response_class=HTMLResponse)
+def admin_page(request: Request):
+    return templates.TemplateResponse(request, "admin.html", {})
+
+
+@app.get("/admin/api/overview")
+def admin_overview(request: Request):
+    require_admin(request)
     con = get_con()
-    try:
-        db.rename_player(con, pid, name=d.get("name"), real_name=d.get("real_name"))
-    except ValueError as e:
-        con.close()
-        return JSONResponse({"error": str(e)}, 400)
-    return _admin_ok(con, "player.rename", f"pid={pid} -> {d.get('name')}")
-
-
-@app.post("/admin/api/player/{pid}/delete")
-async def admin_player_delete(request: Request, pid: int):
-    d = await _admin_body(request)
-    con = get_con()
-    p = db.player_row(con, pid)
-    if not p:
-        con.close()
-        raise HTTPException(404, "Not Found")
-    if (d.get("confirm") or "").strip() != p["name"]:
-        con.close()
-        return JSONResponse({"error": "type the exact player name to confirm"}, 400)
-    db.delete_player(con, pid)
-    return _admin_ok(con, "player.delete", f"pid={pid} [{p['name']}]")
-
-
-@app.post("/admin/api/match/{mid}/edit")
-async def admin_match_edit(request: Request, mid: int):
-    d = await _admin_body(request)
-    con = get_con()
-    try:
-        logic.admin_edit_match(con, mid, sets=d.get("sets"), played_on=d.get("played_on"),
-                               kind=d.get("kind"))
-    except ValueError as e:
-        con.close()
-        return JSONResponse({"error": str(e)}, 400)
-    return _admin_ok(con, "match.edit", f"mid={mid}")
+    groups = con.execute("SELECT COUNT(*) c FROM groups").fetchone()["c"]
+    players = con.execute("SELECT COUNT(*) c FROM players").fetchone()["c"]
+    matches = con.execute("SELECT COUNT(*) c FROM matches WHERE status<>'deleted'").fetchone()["c"]
+    live = con.execute("SELECT COUNT(*) c FROM matches WHERE status='live'").fetchone()["c"]
+    con.close()
+    return {"groups": groups, "players": players, "matches": matches, "live": live}
 
 
 @app.post("/admin/api/match/{mid}/delete")
-async def admin_match_delete(request: Request, mid: int):
-    await _admin_body(request)
+async def admin_delete_match(mid: str, request: Request):
+    require_admin(request)
     con = get_con()
-    try:
-        logic.admin_delete_match(con, mid)
-    except ValueError as e:
-        con.close()
-        return JSONResponse({"error": str(e)}, 400)
-    return _admin_ok(con, "match.delete", f"mid={mid}")
-
-
-@app.post("/admin/api/match/{mid}/void")
-async def admin_match_void(request: Request, mid: int):
-    await _admin_body(request)
-    con = get_con()
-    try:
-        logic.admin_void_match(con, mid)
-    except ValueError as e:
-        con.close()
-        return JSONResponse({"error": str(e)}, 400)
-    return _admin_ok(con, "match.void", f"mid={mid}")
-
-
-@app.post("/admin/api/match/{mid}/unvoid")
-async def admin_match_unvoid(request: Request, mid: int):
-    await _admin_body(request)
-    con = get_con()
-    try:
-        logic.admin_unvoid_match(con, mid)
-    except ValueError as e:
-        con.close()
-        return JSONResponse({"error": str(e)}, 400)
-    return _admin_ok(con, "match.unvoid", f"mid={mid}")
-
-
-@app.post("/admin/api/match/{mid}/restore")
-async def admin_match_restore(request: Request, mid: int):
-    await _admin_body(request)
-    con = get_con()
-    try:
-        logic.admin_restore_match(con, mid)
-    except ValueError as e:
-        con.close()
-        return JSONResponse({"error": str(e)}, 400)
-    return _admin_ok(con, "match.restore", f"mid={mid}")
-
-
-# --- admin relink (identity <-> player) -----------------------------------
-@app.post("/admin/api/group/{gid}/link")
-async def admin_set_link(request: Request, gid: int):
-    d = await _admin_body(request)
-    con = get_con()
-    sub = d.get("auth_sub")
-    pid = d.get("player_id")
-    if not sub or not pid:
-        con.close()
-        return JSONResponse({"error": "auth_sub and player_id required"}, 400)
-    db.admin_set_link(con, gid, sub, int(pid))
-    return _admin_ok(con, "link.set", f"gid={gid} sub={sub} -> pid={pid}")
-
-
-@app.post("/admin/api/group/{gid}/unlink")
-async def admin_unset_link(request: Request, gid: int):
-    d = await _admin_body(request)
-    con = get_con()
-    sub = d.get("auth_sub")
-    if not sub:
-        con.close()
-        return JSONResponse({"error": "auth_sub required"}, 400)
-    db.admin_unlink(con, gid, sub)
-    return _admin_ok(con, "link.unset", f"gid={gid} sub={sub}")
-
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=7860)
+    logic.delete_match(con, mid)
+    con.close()
+    return {"ok": True}

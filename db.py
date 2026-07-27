@@ -1,99 +1,133 @@
-"""SQLite schema + helpers for tennis-scores.
+"""Data layer for Rally — CLEAN FOUNDATION (2026-07-27, Option C).
 
-Ratings are recomputed from finished matches on read (see ratings.rebuild).
-# ponytail: no rating_cache/pair_ratings tables — friend-group history is tiny, so a
-# full rebuild per read is trivial and cannot go stale. Add cached tables only if a
-# group's match count ever makes per-request rebuild measurably slow.
+Identity is GLOBAL: a player row's id IS the auth user id (auth.users.id uuid). No per-group
+player rows, no player_links, no integer ids. Groups are optional; a match may have group_id NULL.
+
+Schema is OWNED BY THE MIGRATIONS on live Postgres (rally_clean_foundation). This module does NOT
+auto-migrate — if a required column is missing it FAILS LOUDLY at startup (see require_schema()).
+The SQLite path mirrors the live schema for local dev + tests; uuids and player codes are generated
+in PYTHON (not gen_random_uuid()/rally_new_code()), so one query path serves both backends.
 """
 from __future__ import annotations
 import os
+import uuid
 import sqlite3
 import secrets
-import string
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 import ratings
 
 DB_PATH = Path(__file__).parent / "tennis.db"
-CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # A-Z2-9, no ambiguous 0/O/1/I
-APPROVAL_HOURS = 24  # retained constant; v2 has no approval gate (results count immediately)
+# Player/group code alphabet: A-Z 2-9 minus confusables O, 0, I, 1, L  (matches DB rally_new_code).
+CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 
-# Production-safe backend: DATABASE_URL (Postgres) if set, else the local SQLite file.
-# The SQLite path is byte-for-byte the original — local dev + all tests are unchanged.
 DATABASE_URL = os.environ.get("DATABASE_URL") or ""
 
 
 def _is_pg():
     return DATABASE_URL.startswith("postgres://") or DATABASE_URL.startswith("postgresql")
 
+
+# Mirrors the live Postgres schema (rally_clean_foundation). SQLite types: uuid->TEXT, bool->INTEGER,
+# timestamptz->TEXT. CHECK constraints match. Per-group game-name uniqueness is a live PG trigger
+# (trg_group_name_unique); on SQLite it is enforced in app code (see group_name_taken()).
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS players (
+  id TEXT PRIMARY KEY,                 -- = auth.users.id (uuid)
+  code TEXT UNIQUE NOT NULL,           -- permanent public player code (Name#CODE)
+  game_name TEXT NOT NULL,
+  real_name TEXT,
+  created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS groups (
-  id INTEGER PRIMARY KEY,
+  id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   code TEXT UNIQUE NOT NULL,
-  is_public INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL,
-  ratings_rev INTEGER NOT NULL DEFAULT 0   -- bumped when a rating-affecting change happens
+  is_public INTEGER NOT NULL DEFAULT 1,
+  admin_id TEXT,
+  created_at TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS players (
-  id INTEGER PRIMARY KEY,
-  group_id INTEGER NOT NULL,
-  name TEXT NOT NULL,          -- GAME NAME (the handle everyone sees, unique per group)
-  real_name TEXT,             -- optional real name shown as subtext; may duplicate
+CREATE TABLE IF NOT EXISTS group_members (
+  group_id TEXT NOT NULL,
+  player_id TEXT NOT NULL,
+  joined_at TEXT NOT NULL,
+  PRIMARY KEY (group_id, player_id)
+);
+CREATE TABLE IF NOT EXISTS group_join_requests (
+  group_id TEXT NOT NULL,
+  player_id TEXT NOT NULL,
   created_at TEXT NOT NULL,
-  -- identity foundation (Task 3/6): permanent public code + immutable auth id + password flag.
-  -- On LIVE Postgres these come from the deliberate MCP migration, NOT this string (SQLite dev only).
-  code TEXT,                  -- permanent public 5-char player code (Name#CODE); unique when set
-  auth_id TEXT,               -- immutable identity = auth.users(id) uuid (text on SQLite)
-  password_set INTEGER NOT NULL DEFAULT 0,  -- 1 once the account has a password (Task 6)
-  -- SQLite-dev-only: COLLATE NOCASE is not valid on Postgres. This whole SCHEMA string
-  -- runs ONLY on the SQLite path (executescript). Postgres uses schema.py, where the same
-  -- case-insensitive uniqueness is a functional unique index on LOWER(name). Keep in sync.
-  UNIQUE(group_id, name COLLATE NOCASE)
+  PRIMARY KEY (group_id, player_id)
 );
 CREATE TABLE IF NOT EXISTS matches (
-  id INTEGER PRIMARY KEY,
-  group_id INTEGER NOT NULL,
-  played_on TEXT,
-  kind TEXT NOT NULL,
-  status TEXT NOT NULL,           -- 'live' | 'finished' (no approval states in v2)
-  logger_player_id INTEGER,
-  created_at TEXT, started_at TEXT, finished_at TEXT,
-  voided INTEGER NOT NULL DEFAULT 0,   -- admin void: kept but excluded from recompute
-  deleted INTEGER NOT NULL DEFAULT 0   -- soft delete: hidden everywhere; admin can restore
+  id TEXT PRIMARY KEY,
+  group_id TEXT,                       -- NULLABLE: a match need not belong to a group
+  former_group_name TEXT,              -- kept if the group is later deleted
+  kind TEXT NOT NULL CHECK (kind IN ('singles','doubles','tt')),
+  status TEXT NOT NULL DEFAULT 'live'
+    CHECK (status IN ('live','frozen','pending_approval','counted','disputed','deleted')),
+  logger_id TEXT,
+  created_at TEXT, started_at TEXT, finished_at TEXT
 );
 CREATE TABLE IF NOT EXISTS match_players (
-  match_id INTEGER NOT NULL,
-  player_id INTEGER NOT NULL,
+  match_id TEXT NOT NULL,
+  player_id TEXT NOT NULL,
   side INTEGER NOT NULL,
-  rotation_pos INTEGER
+  rotation_pos INTEGER,
+  PRIMARY KEY (match_id, player_id)
 );
 CREATE TABLE IF NOT EXISTS match_sets (
-  match_id INTEGER NOT NULL,
+  match_id TEXT NOT NULL,
   set_no INTEGER NOT NULL,
   games_side1 INTEGER NOT NULL DEFAULT 0,
-  games_side2 INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS tt_games (
-  match_id INTEGER NOT NULL,
-  game_no INTEGER NOT NULL,
-  server_player_id INTEGER,
-  receiver_player_id INTEGER,   -- confirmed arrangement (sitter = the third player)
-  winner_player_id INTEGER
+  games_side2 INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (match_id, set_no)
 );
 CREATE TABLE IF NOT EXISTS point_logs (
-  match_id INTEGER NOT NULL,
+  match_id TEXT NOT NULL,
   seq INTEGER NOT NULL,
   winner_side INTEGER NOT NULL,
-  server_player_id INTEGER
+  server_player_id TEXT,
+  point_winner_player_id TEXT,
+  PRIMARY KEY (match_id, seq)
+);
+CREATE TABLE IF NOT EXISTS tt_games (
+  match_id TEXT NOT NULL,
+  game_no INTEGER NOT NULL,
+  round_no INTEGER,
+  server_player_id TEXT,
+  receiver_player_id TEXT,
+  winner_player_id TEXT,
+  PRIMARY KEY (match_id, game_no)
+);
+CREATE TABLE IF NOT EXISTS friendships (
+  a_id TEXT NOT NULL,
+  b_id TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','accepted')),
+  requested_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (a_id, b_id)
+);
+CREATE TABLE IF NOT EXISTS name_history (
+  player_id TEXT NOT NULL,
+  old_name TEXT NOT NULL,
+  changed_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS approvals (
-  match_id INTEGER NOT NULL,
-  player_id INTEGER NOT NULL,
-  action TEXT NOT NULL,
+  match_id TEXT NOT NULL,
+  player_id TEXT NOT NULL,
+  action TEXT NOT NULL CHECK (action IN ('approve','dispute')),
+  reason TEXT,
   approved_at TEXT,
-  deadline TEXT
+  PRIMARY KEY (match_id, player_id)
+);
+CREATE TABLE IF NOT EXISTS freeze_requests (
+  match_id TEXT NOT NULL,
+  player_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('freeze','resume')),
+  approved_at TEXT,
+  PRIMARY KEY (match_id, player_id, kind)
 );
 CREATE TABLE IF NOT EXISTS admin_log (
   id INTEGER PRIMARY KEY,
@@ -101,35 +135,28 @@ CREATE TABLE IF NOT EXISTS admin_log (
   action TEXT NOT NULL,
   target TEXT
 );
-CREATE TABLE IF NOT EXISTS users (
-  auth_sub TEXT PRIMARY KEY,     -- Supabase (or mock) user id
-  email TEXT,
-  created_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS player_links (
-  group_id INTEGER NOT NULL,
-  auth_sub TEXT NOT NULL,
-  player_id INTEGER NOT NULL,
-  created_at TEXT NOT NULL,
-  UNIQUE(group_id, auth_sub)    -- one identity -> one player per group (locked after pick)
-);
 """
+
+REQUIRED = {  # column presence the app depends on — checked loudly at startup (no silent patching)
+    "players": ("id", "code", "game_name", "real_name", "created_at"),
+    "matches": ("id", "group_id", "former_group_name", "kind", "status", "logger_id"),
+    "match_players": ("match_id", "player_id", "side", "rotation_pos"),
+    "groups": ("id", "name", "code", "is_public", "admin_id"),
+    "friendships": ("a_id", "b_id", "status", "requested_by"),
+    "approvals": ("match_id", "player_id", "action"),
+}
 
 
 def now():
     return datetime.utcnow().isoformat(timespec="seconds")
 
 
-def deadline_24h():
-    return (datetime.utcnow() + timedelta(hours=APPROVAL_HOURS)).isoformat(timespec="seconds")
+def gen_uuid():
+    return str(uuid.uuid4())
 
 
 # --- Postgres shim: present the sqlite3.Row / cursor interface the code expects ------
-# ponytail: a ~40-line DBAPI adapter (qmark->pyformat, dict+positional rows, lastval()
-# for lastrowid) instead of rewriting ~60 raw queries into SQLAlchemy Core. The SQLite
-# path stays untouched; the schema is shared via schema.py (used for create_all + tests).
 class _Row(dict):
-    """dict row that also supports positional indexing, so both r["c"] and r[0] work."""
     def __init__(self, names, values):
         super().__init__(zip(names, values))
         self._vals = list(values)
@@ -150,9 +177,7 @@ class _PGCursor:
 
     def fetchone(self):
         row = self.c.fetchone()
-        if row is None:
-            return None
-        return _Row([d[0] for d in self.c.description], row)
+        return None if row is None else _Row([d[0] for d in self.c.description], row)
 
     def fetchall(self):
         names = [d[0] for d in self.c.description]
@@ -161,15 +186,9 @@ class _PGCursor:
     def __iter__(self):
         return iter(self.fetchall())
 
-    @property
-    def lastrowid(self):
-        self.c.execute("SELECT lastval()")
-        return self.c.fetchone()[0]
-
 
 class _PGConn:
-    """Thin wrapper over a psycopg DBAPI connection matching sqlite3.Connection usage."""
-    row_factory = None  # settable no-op; PG rows already behave like sqlite3.Row
+    row_factory = None
 
     def __init__(self, raw):
         self.raw = raw
@@ -179,7 +198,7 @@ class _PGConn:
         cur.execute(_qmark(sql), tuple(params))
         return _PGCursor(cur)
 
-    def executescript(self, sql):  # only exercised on the SQLite path in practice
+    def executescript(self, sql):
         cur = self.raw.cursor()
         cur.execute(sql)
         self.raw.commit()
@@ -212,121 +231,177 @@ def connect(path=DB_PATH):
         return _PGConn(_engine().raw_connection())
     con = sqlite3.connect(path)
     con.row_factory = sqlite3.Row
-    con.execute("PRAGMA foreign_keys=ON")
+    con.execute("PRAGMA foreign_keys=OFF")   # match the live model (group_id null on group delete, etc.)
     return con
 
 
-def _migrate(con):
-    """Add v2 columns to pre-existing databases (idempotent). ALTER ADD COLUMN works on
-    both SQLite and Postgres; duplicate-column errors mean it's already applied."""
-    for col in ("voided INTEGER NOT NULL DEFAULT 0", "deleted INTEGER NOT NULL DEFAULT 0"):
+def require_schema(con):
+    """FAIL LOUDLY if a required column is missing. The schema is owned by the migrations; the app
+    must never silently self-patch (that is how columns went missing before)."""
+    for table, cols in REQUIRED.items():
         try:
-            con.execute(f"ALTER TABLE matches ADD COLUMN {col}")
-            con.commit()
-        except Exception:
-            pass  # already present
-    try:
-        con.execute("ALTER TABLE tt_games ADD COLUMN receiver_player_id INTEGER")
-        con.commit()
-    except Exception:
-        pass
-    try:
-        con.execute("ALTER TABLE players ADD COLUMN real_name TEXT")
-        con.commit()
-    except Exception:
-        pass
-    try:
-        con.execute("ALTER TABLE groups ADD COLUMN ratings_rev INTEGER NOT NULL DEFAULT 0")
-        con.commit()
-    except Exception:
-        pass
-    # Identity foundation (Task 6). SQLite-dev ONLY: on live Postgres these columns are added by
-    # the deliberate MCP migration (migrations/2026-07-27_identity_foundation.sql), never relied on
-    # here — this try/except is exactly the silent path the FOUNDATION dispatch warned about.
-    for col in ("code TEXT", "auth_id TEXT", "password_set INTEGER NOT NULL DEFAULT 0"):
-        try:
-            con.execute(f"ALTER TABLE players ADD COLUMN {col}")
-            con.commit()
-        except Exception:
-            pass
+            con.execute(f"SELECT {', '.join(cols)} FROM {table} LIMIT 0").fetchall()
+        except Exception as e:
+            raise RuntimeError(
+                f"schema check failed for {table}({', '.join(cols)}): {e}. "
+                f"The database is not migrated to rally_clean_foundation. Refusing to start."
+            )
 
 
 def init_db(path=DB_PATH):
-    _RATING_CACHE.clear()   # fresh DB -> drop any cached ratings (keeps tests isolated)
+    _RATING_CACHE.clear()
     if _is_pg():
-        # COLD-START FIX (Task 3): on Postgres, a provisioned DB already has the schema.
-        # One cheap presence check skips create_all + the migration ALTERs entirely — turning
-        # ~14 network round-trips per cold container into 1. Only a truly fresh DB pays setup.
-        eng = _engine()
-        try:
-            with eng.connect() as c:
-                c.exec_driver_sql("SELECT 1 FROM players LIMIT 1")
-            return                      # schema present -> nothing to do
-        except Exception:
-            pass                        # fresh DB -> create + migrate once
-        import schema
-        schema.metadata.create_all(eng)
         con = connect(path)
-        _migrate(con)
+        require_schema(con)     # live PG is already migrated; verify, never create/patch
         con.close()
         return
     con = connect(path)
-    con.executescript(SCHEMA)
+    con.executescript(SCHEMA)   # SQLite dev/test: build the mirror
     con.commit()
-    _migrate(con)
+    require_schema(con)
     con.close()
 
 
-# Duplicate-name detection works across backends (sqlite + psycopg raise different types).
 try:
     import psycopg
     INTEGRITY_ERRORS = (sqlite3.IntegrityError, psycopg.errors.IntegrityError)
-except Exception:  # psycopg only needed for the Postgres backend
+except Exception:
     INTEGRITY_ERRORS = (sqlite3.IntegrityError,)
 
 
-# --- groups ---------------------------------------------------------------
-def gen_code(con):
+# --- codes ----------------------------------------------------------------
+def _unique_code(con, table, length):
     for _ in range(50):
-        code = "".join(secrets.choice(CODE_ALPHABET) for _ in range(6))
-        if not con.execute("SELECT 1 FROM groups WHERE code=?", (code,)).fetchone():
+        code = "".join(secrets.choice(CODE_ALPHABET) for _ in range(length))
+        if not con.execute(f"SELECT 1 FROM {table} WHERE code=?", (code,)).fetchone():
             return code
-    raise RuntimeError("could not allocate a unique group code")
+    raise RuntimeError(f"could not allocate a unique {table} code")
 
 
-def create_group(con, name):
-    code = gen_code(con)
-    cur = con.execute(
-        "INSERT INTO groups(name, code, is_public, created_at) VALUES(?,?,0,?)",
-        (name.strip(), code, now()),
+def new_player_code(con):
+    return _unique_code(con, "players", 5)
+
+
+def new_group_code(con):
+    return _unique_code(con, "groups", 6)
+
+
+# --- players (global identity) --------------------------------------------
+def get_player(con, pid):
+    return con.execute("SELECT * FROM players WHERE id=?", (pid,)).fetchone()
+
+
+def get_player_by_code(con, code):
+    return con.execute("SELECT * FROM players WHERE code=?", (code.strip().upper(),)).fetchone()
+
+
+def create_player(con, pid, game_name, real_name=None):
+    """First sign-in: the auth user id becomes the player id. Generates a permanent code."""
+    game_name = (game_name or "").strip()
+    if not game_name:
+        raise ValueError("game name required")
+    code = new_player_code(con)
+    con.execute(
+        "INSERT INTO players(id, code, game_name, real_name, created_at) VALUES(?,?,?,?,?)",
+        (pid, code, game_name, (real_name or "").strip() or None, now()),
     )
     con.commit()
-    return cur.lastrowid, code
+    return code
+
+
+def rename_player(con, pid, game_name=None, real_name=None):
+    if game_name is not None:
+        game_name = game_name.strip()
+        if not game_name:
+            raise ValueError("game name required")
+        cur = get_player(con, pid)
+        if cur and cur["game_name"] and cur["game_name"] != game_name:
+            con.execute("INSERT INTO name_history(player_id, old_name, changed_at) VALUES(?,?,?)",
+                        (pid, cur["game_name"], now()))
+        con.execute("UPDATE players SET game_name=? WHERE id=?", (game_name, pid))
+    if real_name is not None:
+        con.execute("UPDATE players SET real_name=? WHERE id=?", ((real_name.strip() or None), pid))
+    con.commit()
+
+
+# --- groups ---------------------------------------------------------------
+def create_group(con, name, admin_id):
+    gid, code = gen_uuid(), new_group_code(con)
+    con.execute("INSERT INTO groups(id, name, code, is_public, admin_id, created_at) VALUES(?,?,?,?,?,?)",
+                (gid, name.strip(), code, 1, admin_id, now()))
+    con.execute("INSERT INTO group_members(group_id, player_id, joined_at) VALUES(?,?,?)",
+                (gid, admin_id, now()))
+    con.commit()
+    return gid, code
 
 
 def group_by_code(con, code):
-    return con.execute("SELECT * FROM groups WHERE code=?", (code.upper().strip(),)).fetchone()
+    return con.execute("SELECT * FROM groups WHERE code=?", (code.strip().upper(),)).fetchone()
 
 
 def group_by_id(con, gid):
     return con.execute("SELECT * FROM groups WHERE id=?", (gid,)).fetchone()
 
 
+def groups_of_player(con, pid):
+    return con.execute(
+        "SELECT g.* FROM groups g JOIN group_members gm ON gm.group_id=g.id "
+        "WHERE gm.player_id=? ORDER BY g.created_at DESC", (pid,)).fetchall()
+
+
+def is_member(con, gid, pid):
+    return bool(con.execute("SELECT 1 FROM group_members WHERE group_id=? AND player_id=?",
+                            (gid, pid)).fetchone())
+
+
+def add_member(con, gid, pid):
+    if not is_member(con, gid, pid):
+        con.execute("INSERT INTO group_members(group_id, player_id, joined_at) VALUES(?,?,?)",
+                    (gid, pid, now()))
+        con.commit()
+
+
+def remove_member(con, gid, pid):
+    con.execute("DELETE FROM group_members WHERE group_id=? AND player_id=?", (gid, pid))
+    con.commit()
+
+
+def members_of(con, gid):
+    return con.execute(
+        "SELECT p.* FROM players p JOIN group_members gm ON gm.player_id=p.id "
+        "WHERE gm.group_id=? ORDER BY LOWER(p.game_name)", (gid,)).fetchall()
+
+
+def group_name_taken(con, gid, game_name, exclude_pid=None):
+    """Per-group game-name uniqueness (the live PG trigger; enforced here for SQLite/app writes)."""
+    rows = con.execute(
+        "SELECT p.id FROM players p JOIN group_members gm ON gm.player_id=p.id "
+        "WHERE gm.group_id=? AND LOWER(p.game_name)=LOWER(?)", (gid, game_name)).fetchall()
+    return any((r["id"] != exclude_pid) for r in rows)
+
+
+def add_join_request(con, gid, pid):
+    con.execute("INSERT OR IGNORE INTO group_join_requests(group_id, player_id, created_at) VALUES(?,?,?)",
+                (gid, pid, now())) if not _is_pg() else con.execute(
+        "INSERT INTO group_join_requests(group_id, player_id, created_at) VALUES(?,?,?) "
+        "ON CONFLICT DO NOTHING", (gid, pid, now()))
+    con.commit()
+
+
+def join_requests_of(con, gid):
+    return con.execute(
+        "SELECT p.* FROM players p JOIN group_join_requests r ON r.player_id=p.id "
+        "WHERE r.group_id=? ORDER BY r.created_at", (gid,)).fetchall()
+
+
+def clear_join_request(con, gid, pid):
+    con.execute("DELETE FROM group_join_requests WHERE group_id=? AND player_id=?", (gid, pid))
+    con.commit()
+
+
 def set_public(con, gid, is_public):
     con.execute("UPDATE groups SET is_public=? WHERE id=?", (1 if is_public else 0, gid))
     con.commit()
-
-
-def all_groups(con):
-    return con.execute("SELECT * FROM groups ORDER BY created_at DESC, id DESC").fetchall()
-
-
-def regen_code(con, gid):
-    """Assign a fresh unique code; the old code stops resolving immediately."""
-    code = gen_code(con)
-    con.execute("UPDATE groups SET code=? WHERE id=?", (code, gid))
-    con.commit()
-    return code
 
 
 def rename_group(con, gid, name):
@@ -337,142 +412,97 @@ def rename_group(con, gid, name):
     con.commit()
 
 
-def _match_ids_of_group(con, gid):
-    return [r["id"] for r in con.execute("SELECT id FROM matches WHERE group_id=?", (gid,)).fetchall()]
+def regen_group_code(con, gid):
+    code = new_group_code(con)
+    con.execute("UPDATE groups SET code=? WHERE id=?", (code, gid))
+    con.commit()
+    return code
 
 
-def _match_ids_of_player(con, pid):
-    return [r["match_id"] for r in
-            con.execute("SELECT DISTINCT match_id FROM match_players WHERE player_id=?", (pid,)).fetchall()]
-
-
-def _delete_matches(con, mids):
-    for mid in mids:
-        for t in ("match_players", "match_sets", "tt_games", "point_logs", "approvals"):
-            con.execute(f"DELETE FROM {t} WHERE match_id=?", (mid,))
-        con.execute("DELETE FROM matches WHERE id=?", (mid,))
+def set_admin(con, gid, pid):
+    con.execute("UPDATE groups SET admin_id=? WHERE id=?", (pid, gid))
+    con.commit()
 
 
 def delete_group(con, gid):
-    """Cascade-delete a group and ONLY its own data."""
-    _delete_matches(con, _match_ids_of_group(con, gid))
-    con.execute("DELETE FROM players WHERE group_id=?", (gid,))
+    """Delete a group but KEEP its matches: group_id -> NULL, stamped with former_group_name."""
+    g = group_by_id(con, gid)
+    former = g["name"] if g else None
+    con.execute("UPDATE matches SET group_id=NULL, former_group_name=? WHERE group_id=?", (former, gid))
+    con.execute("DELETE FROM group_members WHERE group_id=?", (gid,))
+    con.execute("DELETE FROM group_join_requests WHERE group_id=?", (gid,))
     con.execute("DELETE FROM groups WHERE id=?", (gid,))
     con.commit()
-    _RATING_CACHE.pop(gid, None)
 
 
-def rename_player(con, pid, name=None, real_name=None):
-    """Update a player's game name and/or real name. game name (if given) must be non-empty
-    and unique in the group; real name is optional and may duplicate. Pass real_name=""
-    to clear it."""
-    if name is not None:
-        name = name.strip()
-        if not name:
-            raise ValueError("game name required")
-        try:
-            con.execute("UPDATE players SET name=? WHERE id=?", (name, pid))
-        except INTEGRITY_ERRORS:
-            raise ValueError("that game name is taken in this group — try another")
-    if real_name is not None:
-        con.execute("UPDATE players SET real_name=? WHERE id=?",
-                    ((real_name.strip() or None), pid))
+# --- friendships (one row per unordered pair; a_id<b_id) ------------------
+def _pair(x, y):
+    return (x, y) if x < y else (y, x)
+
+
+def friendship(con, x, y):
+    a, b = _pair(x, y)
+    return con.execute("SELECT * FROM friendships WHERE a_id=? AND b_id=?", (a, b)).fetchone()
+
+
+def request_friend(con, requester, other):
+    if requester == other:
+        raise ValueError("cannot friend yourself")
+    a, b = _pair(requester, other)
+    existing = friendship(con, a, b)
+    if existing:
+        if existing["status"] == "accepted":
+            return "accepted"
+        # a pending request from the OTHER side -> accept it
+        if existing["requested_by"] != requester:
+            con.execute("UPDATE friendships SET status='accepted' WHERE a_id=? AND b_id=?", (a, b))
+            con.commit()
+            return "accepted"
+        return "pending"
+    con.execute("INSERT INTO friendships(a_id, b_id, status, requested_by, created_at) VALUES(?,?, 'pending', ?, ?)",
+                (a, b, requester, now()))
+    con.commit()
+    return "pending"
+
+
+def accept_friend(con, me, other):
+    a, b = _pair(me, other)
+    con.execute("UPDATE friendships SET status='accepted' WHERE a_id=? AND b_id=? AND requested_by<>?",
+                (a, b, me))
     con.commit()
 
 
-def delete_player(con, pid):
-    """Delete a player and cascade the matches they played (their group only)."""
-    row = con.execute("SELECT group_id FROM players WHERE id=?", (pid,)).fetchone()
-    _delete_matches(con, _match_ids_of_player(con, pid))
-    con.execute("DELETE FROM players WHERE id=?", (pid,))
-    con.commit()
-    if row:
-        bump_ratings(con, row["group_id"])
-
-
-def player_row(con, pid):
-    return con.execute("SELECT * FROM players WHERE id=?", (pid,)).fetchone()
-
-
-# --- admin log ------------------------------------------------------------
-def log_admin(con, action, target=""):
-    con.execute("INSERT INTO admin_log(at, action, target) VALUES(?,?,?)", (now(), action, target))
+def decline_friend(con, me, other):
+    a, b = _pair(me, other)
+    con.execute("DELETE FROM friendships WHERE a_id=? AND b_id=?", (a, b))
     con.commit()
 
 
-def admin_logs(con, limit=100):
-    return con.execute("SELECT * FROM admin_log ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+def accepted_friends(con, pid):
+    rows = con.execute(
+        "SELECT p.* FROM players p JOIN friendships f "
+        "ON (f.a_id=p.id OR f.b_id=p.id) "
+        "WHERE f.status='accepted' AND (f.a_id=? OR f.b_id=?) AND p.id<>? "
+        "ORDER BY LOWER(p.game_name)", (pid, pid, pid)).fetchall()
+    return rows
 
 
-# --- identities & player links (auth) -------------------------------------
-def upsert_user(con, auth_sub, email):
-    row = con.execute("SELECT auth_sub FROM users WHERE auth_sub=?", (auth_sub,)).fetchone()
-    if row:
-        con.execute("UPDATE users SET email=? WHERE auth_sub=?", (email, auth_sub))
-    else:
-        con.execute("INSERT INTO users(auth_sub, email, created_at) VALUES(?,?,?)",
-                    (auth_sub, email, now()))
-    con.commit()
-
-
-def get_link(con, group_id, auth_sub):
-    """Return the linked player_id for this identity in this group, or None."""
-    r = con.execute("SELECT player_id FROM player_links WHERE group_id=? AND auth_sub=?",
-                    (group_id, auth_sub)).fetchone()
-    return r["player_id"] if r else None
-
-
-def set_link(con, group_id, auth_sub, player_id):
-    """First-time link (locked). Raises if this identity is already linked in this group."""
-    if get_link(con, group_id, auth_sub) is not None:
-        raise ValueError("already linked in this group")
-    con.execute("INSERT INTO player_links(group_id, auth_sub, player_id, created_at) VALUES(?,?,?,?)",
-                (group_id, auth_sub, player_id, now()))
-    con.commit()
-
-
-def admin_set_link(con, group_id, auth_sub, player_id):
-    """Admin relink: overwrite any existing link (used by /admin only)."""
-    con.execute("DELETE FROM player_links WHERE group_id=? AND auth_sub=?", (group_id, auth_sub))
-    con.execute("INSERT INTO player_links(group_id, auth_sub, player_id, created_at) VALUES(?,?,?,?)",
-                (group_id, auth_sub, player_id, now()))
-    con.commit()
-
-
-def admin_unlink(con, group_id, auth_sub):
-    con.execute("DELETE FROM player_links WHERE group_id=? AND auth_sub=?", (group_id, auth_sub))
-    con.commit()
-
-
-def links_of_group(con, group_id):
+def pending_friend_requests(con, pid):
+    """Incoming pending requests (someone else asked me)."""
     return con.execute(
-        "SELECT pl.auth_sub, pl.player_id, u.email, p.name FROM player_links pl "
-        "LEFT JOIN users u ON u.auth_sub=pl.auth_sub "
-        "LEFT JOIN players p ON p.id=pl.player_id WHERE pl.group_id=? ORDER BY u.email",
-        (group_id,)).fetchall()
+        "SELECT p.* FROM players p JOIN friendships f ON (f.a_id=p.id OR f.b_id=p.id) "
+        "WHERE f.status='pending' AND f.requested_by=p.id AND (f.a_id=? OR f.b_id=?) AND p.id<>?",
+        (pid, pid, pid)).fetchall()
 
 
-# --- players --------------------------------------------------------------
-def add_player(con, group_id, name, real_name=None):
-    name = (name or "").strip()
-    if not name:
-        raise ValueError("game name required")
-    real_name = (real_name or "").strip() or None
-    try:
-        cur = con.execute(
-            "INSERT INTO players(group_id, name, real_name, created_at) VALUES(?,?,?,?)",
-            (group_id, name, real_name, now()),
-        )
-        con.commit()
-        return cur.lastrowid
-    except INTEGRITY_ERRORS:
-        raise ValueError("duplicate name in this group")
-
-
-def players_of(con, group_id):
+def search_players(con, q):
+    q = (q or "").strip()
+    if not q:
+        return []
+    like = f"%{q.lower()}%"
     return con.execute(
-        "SELECT * FROM players WHERE group_id=? ORDER BY LOWER(name)", (group_id,)
-    ).fetchall()
+        "SELECT * FROM players WHERE LOWER(game_name) LIKE ? OR UPPER(code)=? ORDER BY LOWER(game_name) LIMIT 20",
+        (like, q.upper())).fetchall()
 
 
 # --- matches --------------------------------------------------------------
@@ -482,26 +512,20 @@ def match_row(con, mid):
 
 def match_players(con, mid):
     return con.execute(
-        "SELECT mp.*, p.name, p.real_name FROM match_players mp JOIN players p ON p.id=mp.player_id "
-        "WHERE mp.match_id=? ORDER BY mp.side, mp.rotation_pos, mp.player_id",
-        (mid,),
-    ).fetchall()
+        "SELECT mp.*, p.game_name AS name, p.real_name FROM match_players mp "
+        "JOIN players p ON p.id=mp.player_id WHERE mp.match_id=? "
+        "ORDER BY mp.side, mp.rotation_pos, mp.player_id", (mid,)).fetchall()
 
 
 def match_sets(con, mid):
-    return con.execute(
-        "SELECT * FROM match_sets WHERE match_id=? ORDER BY set_no", (mid,)
-    ).fetchall()
+    return con.execute("SELECT * FROM match_sets WHERE match_id=? ORDER BY set_no", (mid,)).fetchall()
 
 
 def tt_games(con, mid):
-    return con.execute(
-        "SELECT * FROM tt_games WHERE match_id=? ORDER BY game_no", (mid,)
-    ).fetchall()
+    return con.execute("SELECT * FROM tt_games WHERE match_id=? ORDER BY game_no", (mid,)).fetchall()
 
 
 def sides(con, mid):
-    """Return (side1_ids, side2_ids, rotation_ids)."""
     rows = match_players(con, mid)
     s1 = [r["player_id"] for r in rows if r["side"] == 1]
     s2 = [r["player_id"] for r in rows if r["side"] == 2]
@@ -510,7 +534,19 @@ def sides(con, mid):
     return s1, s2, rot
 
 
-# --- rating rebuild -------------------------------------------------------
+def participants(con, mid):
+    return [r["player_id"] for r in con.execute(
+        "SELECT player_id FROM match_players WHERE match_id=?", (mid,)).fetchall()]
+
+
+def set_status(con, mid, status):
+    con.execute("UPDATE matches SET status=? WHERE id=?", (status, mid))
+    con.commit()
+
+
+# --- rating rebuild (GLOBAL; optional group filter) -----------------------
+# A match counts toward ratings only when status='counted'. Ratings are global per player,
+# rebuilt from all counted matches (optionally restricted to one group).
 def _match_to_dict(con, m):
     mid = m["id"]
     s1, s2, rot = sides(con, mid)
@@ -519,7 +555,6 @@ def _match_to_dict(con, m):
         return {"kind": "tt", "rotation": rot, "games": games}
     sets = [(s["games_side1"], s["games_side2"]) for s in match_sets(con, mid)]
     d = {"kind": m["kind"], "side1": s1, "side2": s2, "sets": sets}
-    # live-scored matches carry point totals -> point-dominance factor (typed matches don't)
     pts = con.execute(
         "SELECT winner_side, COUNT(*) c FROM point_logs WHERE match_id=? GROUP BY winner_side", (mid,)
     ).fetchall()
@@ -529,73 +564,46 @@ def _match_to_dict(con, m):
     return d
 
 
-def _rebuild_rating_state(con, group_id):
-    ms = con.execute(
-        "SELECT * FROM matches WHERE group_id=? AND status='finished' AND voided=0 AND deleted=0 "
-        "ORDER BY COALESCE(finished_at, created_at), id",
-        (group_id,),
-    ).fetchall()
+def rating_state(con, group_id=None):
+    """Global rating state from counted matches. Pass group_id to restrict to one group."""
+    if group_id:
+        ms = con.execute(
+            "SELECT * FROM matches WHERE status='counted' AND group_id=? "
+            "ORDER BY COALESCE(finished_at, created_at), id", (group_id,)).fetchall()
+    else:
+        ms = con.execute(
+            "SELECT * FROM matches WHERE status='counted' "
+            "ORDER BY COALESCE(finished_at, created_at), id").fetchall()
     return ratings.rebuild([_match_to_dict(con, m) for m in ms])
 
 
-# In-process rating cache keyed by group_id, validated by groups.ratings_rev (Task 2).
-# ponytail: process-local dict — perfect for one worker; a shared cache (redis) is the scale
-# upgrade if multiple workers ever need to share it. Correctness is guaranteed by the rev
-# check: a stale rev forces a rebuild. Callers only READ the returned state (no mutation).
-_RATING_CACHE = {}
-
-
-def ratings_rev(con, group_id):
-    r = con.execute("SELECT ratings_rev FROM groups WHERE id=?", (group_id,)).fetchone()
-    return r["ratings_rev"] if r else 0
-
-
-def bump_ratings(con, group_id):
-    """Call on every rating-affecting change so the cache invalidates."""
-    con.execute("UPDATE groups SET ratings_rev = ratings_rev + 1 WHERE id=?", (group_id,))
-    con.commit()
-
-
-def rating_state(con, group_id, use_cache=True):
-    """Cached rating state (FINISHED, non-voided, non-deleted). Recomputed only when the
-    group's ratings_rev changed since the cache was built — Ranks/Live no longer walk the
-    whole match history on every read."""
-    if not use_cache:
-        return _rebuild_rating_state(con, group_id)
-    rev = ratings_rev(con, group_id)
-    hit = _RATING_CACHE.get(group_id)
-    if hit and hit[0] == rev:
-        return hit[1]
-    state = _rebuild_rating_state(con, group_id)
-    _RATING_CACHE[group_id] = (rev, state)
-    return state
-
-
-# --- v2 match flags (immediate results; admin void/restore) ---------------
-def set_voided(con, mid, val):
-    con.execute("UPDATE matches SET voided=? WHERE id=?", (1 if val else 0, mid))
-    con.commit()
-
-
-def set_deleted(con, mid, val):
-    con.execute("UPDATE matches SET deleted=? WHERE id=?", (1 if val else 0, mid))
+# --- admin log ------------------------------------------------------------
+def log_admin(con, action, target=""):
+    con.execute("INSERT INTO admin_log(at, action, target) VALUES(?,?,?)", (now(), action, target))
     con.commit()
 
 
 if __name__ == "__main__":
-    # self-check: schema builds, code is unique & legal, isolation holds
-    con = sqlite3.connect(":memory:")
-    con.row_factory = sqlite3.Row
+    con = connect(":memory:")
     con.executescript(SCHEMA)
-    g1, c1 = create_group(con, "Alpha")
-    g2, c2 = create_group(con, "Beta")
-    assert c1 != c2 and len(c1) == 6 and all(ch in CODE_ALPHABET for ch in c1)
-    p1 = add_player(con, g1, "Sam")
-    try:
-        add_player(con, g1, "sam")  # ci duplicate
-        assert False, "should reject dup"
-    except ValueError:
-        pass
-    p2 = add_player(con, g2, "Sam")  # same name, different group = fine
-    assert p1 != p2
+    require_schema(con)
+    # identity: create two global players
+    pa, pb = gen_uuid(), gen_uuid()
+    ca = create_player(con, pa, "Ann")
+    cb = create_player(con, pb, "Bob")
+    assert ca != cb and len(ca) == 5 and all(ch in CODE_ALPHABET for ch in ca)
+    # a match with NO group scores fine
+    import logic
+    mid = logic.start_match(con, None, "singles", [pa], [pb], [], pa)
+    assert match_row(con, mid)["group_id"] is None
+    logic.edit_sets(con, mid, [(6, 4)])
+    logic.finish_match(con, mid)                     # -> pending_approval (needs approvals)
+    logic.approve(con, mid, pa); logic.approve(con, mid, pb)
+    assert match_row(con, mid)["status"] == "counted"
+    st = rating_state(con)
+    assert st["singles"][pa] > 1200 and st["singles"][pb] < 1200
+    # friendship
+    assert request_friend(con, pa, pb) == "pending"
+    assert request_friend(con, pb, pa) == "accepted"      # reciprocal accepts
+    assert [p["id"] for p in accepted_friends(con, pa)] == [pb]
     print("OK db")

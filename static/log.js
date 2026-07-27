@@ -68,7 +68,7 @@ function renderCourt() {
     const live = p.live ? '<span class="dot pulse"></span>' : '';
     const real = p.real_name ? `<span class="chip-real">${esc(p.real_name)}</span>` : '';
     const busyNote = (p.live && !sel) ? '<span class="chip-real">· in a live match</span>' : '';
-    return `<div class="chip ${sel ? 'sel' : ''} ${p.live && !sel ? 'busy' : ''}" onclick="rosterTap(${p.id})">${live}${esc(p.name)}${real}${busyNote}</div>`;
+    return `<div class="chip ${sel ? 'sel' : ''} ${p.live && !sel ? 'busy' : ''}" onclick="rosterTap('${p.id}')">${live}${esc(p.name)}${real}${busyNote}</div>`;
   }).join("");
   document.getElementById("courtWrap").innerHTML =
     `<div class="chips" style="margin-top:6px">${roster || '<span class="muted">No players yet — sign in and set up your player.</span>'}</div>
@@ -120,9 +120,20 @@ function renderChem() {
   }).join("");
 }
 function anyLiveInGroup() { return PLAYERS.some(p => p.live); }
+// The Start button always SAYS why it can't start — never a dead tap. Placing yourself is always
+// possible; the min-players rule (2 singles / 4 doubles / 3 TT) is stated in plain words.
 function updateStartBtn() {
   const btn = document.getElementById("startBtn"); if (!btn) return;
-  if (EDIT && EDIT.mid) { btn.disabled = true; btn.textContent = "A match is already live"; btn.classList.add("greyed"); }
+  let reason = null;
+  if (EDIT && EDIT.mid) {
+    reason = "A match is already live";
+  } else {
+    const need = needSlots(NEW.kind);
+    const word = NEW.kind === "singles" ? "singles" : NEW.kind === "doubles" ? "doubles" : "triple threat";
+    if ((PLAYERS || []).length < need) reason = "add a friend to play " + word;   // not enough people to fill it
+    else if (NEW.slots.some(x => !x)) reason = "place " + need + " players to start";
+  }
+  if (reason) { btn.disabled = true; btn.textContent = reason; btn.classList.add("greyed"); }
   else { btn.disabled = false; btn.textContent = "▶ Start"; btn.classList.remove("greyed"); }
 }
 function startPayload() {
@@ -151,10 +162,12 @@ async function startMatch() {
 
 // ---- live editor ----
 async function loadEditor() {
-  const d = await api(G("/live"));
-  const m = d.matches[0];
   const host = document.getElementById("liveEditor");
-  if (!m) { EDIT = null; if (host) host.innerHTML = `<div class="empty">No live match yet.</div>`; updateStartBtn(); return; }
+  const d = await raceTimeout(api(G("/live")), 6000, null);   // never hang on a stalled/erroring feed
+  if (!host) return;
+  if (!d) { host.innerHTML = `<div class="empty">Couldn't load the live match — <a href="#" onclick="loadEditor();return false">retry</a></div>`; updateStartBtn(); return; }
+  const m = d.matches[0];
+  if (!m) { EDIT = null; host.innerHTML = `<div class="empty">No live match yet.</div>`; updateStartBtn(); return; }
   if (EDIT && EDIT.mid === m.id) { updateStartBtn(); return; }
   hydrateEditor(m); updateStartBtn();
 }
@@ -247,7 +260,7 @@ function renderTTEditor(msg, confirm) {
   // confirmation required. When the rotation is unconfirmed, serve won't be tracked and a link
   // lets the scorer set it.
   const award = `<div class="ttaward"><div class="muted" style="margin-top:10px">Or award a game directly:</div>
-    <div class="chips" style="margin-top:6px">${m.rot.map(id => `<button class="btn ghost sm" style="flex:0 0 auto" onclick="ttAward(${id})">+ ${esc(m.names[id])}</button>`).join("")}</div>
+    <div class="chips" style="margin-top:6px">${m.rot.map(id => `<button class="btn ghost sm" style="flex:0 0 auto" onclick="ttAward('${id}')">+ ${esc(m.names[id])}</button>`).join("")}</div>
     ${m.rotKnown === false ? `<div class="note" style="color:var(--clay-deep)">Rotation unconfirmed — serve isn't tracked for these games. <a href="#" onclick="ttSetRotation();return false"><b>Set who's serving</b></a></div>` : ""}</div>`;
   btns.innerHTML = `<div class="row"><button class="btn clay" onclick="ttPoint(1)">Point ${esc(m.names[c.server])} 🎾</button>
     <button class="btn clay" onclick="ttPoint(2)">Point ${esc(m.names[c.receiver])}</button></div>
@@ -285,7 +298,7 @@ function renderRotationConfirm(host, conf) {
 }
 function ttPickRotation() {
   const m = EDIT; const host = document.getElementById("ttButtons"); EDIT._pick = { server: null, receiver: null };
-  const opts = role => m.rot.map(id => `<button class="chip pickchip" onclick="ttPickSet('${role}',${id},this)">${esc(m.names[id])}</button>`).join("");
+  const opts = role => m.rot.map(id => `<button class="chip pickchip" onclick="ttPickSet('${role}','${id}',this)">${esc(m.names[id])}</button>`).join("");
   host.innerHTML = `<div class="muted">Who serves?</div><div class="chips">${opts('server')}</div>
     <div class="muted" style="margin-top:6px">Who receives?</div><div class="chips">${opts('receiver')}</div>
     <div class="note" id="pickSit">Sits out: (automatic)</div>

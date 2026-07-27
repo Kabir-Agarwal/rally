@@ -71,6 +71,14 @@ def test_identity_is_the_token_stable_across_devices(tmp_path):
     assert pid1 == pid2
 
 
+def test_picker_always_includes_self_even_with_zero_friends(tmp_path):
+    # Task 4: with no friends, /api/meta offers exactly one placeable chip — you.
+    appmod, c = _fresh(tmp_path)
+    a, ha = signin(c, "solo", "Solo")
+    players = c.get("/api/meta", headers=ha).json()["players"]
+    assert len(players) == 1 and players[0]["id"] == a
+
+
 def test_court_picker_reads_accepted_friends_only(tmp_path):
     appmod, c = _fresh(tmp_path)
     a, ha = signin(c, "a", "Ann")

@@ -163,7 +163,34 @@ applied or committed.
   logger_player_id, player_links) on LIVE production data. Kabir must decide the merge before any
   SQL is finalized. Recorded in the deliverable's CONTRADICTIONS.
 
-## Group actions + court picker (2026-07-27) — deployed (latest)
+## Sign-in fail-open + group-delete re-render + boot perf (2026-07-27) — deployed (latest)
+Deployed dpl_ASEiYji9ZcJafbyrbxD9oYRei6xs (READY), hash 493c1a12ba. 97 Python + Node green.
+- **Task 1 (sign-in dead end):** `auth.js config()` used to fall back to `{mode:"mock"}` on a 4s
+  timeout or any thrown fetch AND cache it — so a slow/blocked request on a 2nd device showed a
+  guest "Continue" button the supabase server refuses ("guest sign-in is disabled"). Fixed:
+  config() now retries 3x with 10s per-attempt timeout + backoff, caches ONLY a real answer, and on
+  failure returns `{mode:"error"}` (never mock, never cached). renderSignIn shows "Couldn't reach
+  the server — retry" with a Retry button (resetConfig + re-render) — never a refused button. Guest
+  "Continue" renders ONLY when the server says so: client_config now returns `guest`
+  (= AUTH_MODE=="mock"); the client checks `cfg.guest`. Simulated a failing/blocked
+  /api/auth/config: got the retry card, no guest button; simulated `{mode:"mock",guest:false}`: no
+  guest button. Live: config sends guest:false, sign-in shows Continue with Google, no guest button.
+- **Task 2 (delete wipes list):** `renderGroupRows` did `host.innerHTML=""` BEFORE the async
+  /api/groups fetch, so a delete blanked the whole list until the refetch repopulated. Fixed: it's
+  now atomic (fetch → build a fragment off-screen → `replaceChildren` in one swap, no blank), and
+  confirmDeleteGroup/leaveGroup remove just the deleted card in place for instant feedback. Verified
+  locally: deleting 1 of 2 leaves the survivor card visible throughout (1 immediately after, no wipe).
+- **Task 3 (slow):** measured boot fetch order (local, mock). BEFORE: 3 SEQUENTIAL calls —
+  /api/auth/me -> /api/me -> then renderTab -> /api/live (each of the first two is a server-side
+  Supabase token-verify round trip in prod, blocking first content). Fixed: boot renders the tab
+  immediately and resolves identity IN PARALLEL, so /api/me and /api/live now start together (was
+  /api/live waiting for /api/me). One fewer sequential verify before first paint. No caching layer
+  added. Tabs already render a skeleton synchronously then fill.
+- **UNVERIFIED BY ME:** no Google session and no 2nd device here — the real second-device sign-in,
+  the delete re-render on his device, and the prod cold-start/mobile boot latency need his devices.
+  Local numbers are mock-mode (no cold start, instant verify) so they show the STRUCTURE, not prod ms.
+
+## Group actions + court picker (2026-07-27) — deployed (earlier)
 Deployed dpl_4pk6HnfYsZx91ATv6CZ8inBpsBVK (READY), hash cfc9044b77. 96 Python + Node green.
 - **Task 3 (court picker dead tap) — ROOT CAUSE:** the roster chip's onclick was
   `rosterTap(${p.id})` with player ids now being UUID STRINGS → the attribute became malformed JS

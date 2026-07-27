@@ -43,7 +43,7 @@ async function initLog(isRefresh) {
   poll(loadEditor, 4000);   // tracked poller — cleared when leaving the Log tab
 }
 async function refreshMeta() {
-  const meta = await api(`/g/${GROUP.code}/api/meta`);
+  const meta = await api(G("/meta"));
   PLAYERS = meta.players; PAIRS = meta.pairs; PAIRPROV = meta.pair_provisional;
 }
 function setKind(kind, btn) {
@@ -105,7 +105,7 @@ function renderChem() {
     if (!t[0] || !t[1]) {
       val = `<span class="muted">pick both players</span>`;
     } else {
-      const key = [Math.min(t[0], t[1]), Math.max(t[0], t[1])].join("_");
+      const key = [t[0], t[1]].sort().join("_");
       const pr = PAIRS[key];
       if (!pr || pr.n < PAIRPROV) {
         const need = PAIRPROV - (pr ? pr.n : 0);
@@ -143,7 +143,7 @@ async function startMatch() {
   if (busy.length) { err.textContent = (PLAYERS.find(p => p.id === busy[0]).name) + " is already in a live match"; return; }
   if (anyLiveInGroup() || (EDIT && EDIT.mid)) { err.textContent = "A match is already live — finish it first"; return; }
   try {
-    await api(`/g/${GROUP.code}/api/match/start`, startPayload());
+    await api("/api/match/start", { ...startPayload(), group: window.FILTER || null });
     document.getElementById("startMsg").innerHTML = '✔ Match started — score it in <b>Update the live match</b> just below';
     setKind(NEW.kind); await refreshMeta(); renderCourt(); loadEditor();
   } catch (e) { err.textContent = e; }
@@ -151,7 +151,7 @@ async function startMatch() {
 
 // ---- live editor ----
 async function loadEditor() {
-  const d = await api(`/g/${GROUP.code}/api/live`);
+  const d = await api(G("/live"));
   const m = d.matches[0];
   const host = document.getElementById("liveEditor");
   if (!m) { EDIT = null; if (host) host.innerHTML = `<div class="empty">No live match yet.</div>`; updateStartBtn(); return; }
@@ -202,8 +202,8 @@ function renderPointEditor() {
       <button class="btn danger sm" onclick="deleteMatch()">Delete</button></div>
     <div id="gridBox"></div><div class="err" id="edErr"></div></div>`;
 }
-function pt(side) { EDIT.eng.addPoint(side); renderPointEditor(); enqueue(`/g/${GROUP.code}/api/match/${EDIT.mid}/point`, { winner_side: side }); }
-function ptUndo() { EDIT.eng.undo(); renderPointEditor(); enqueue(`/g/${GROUP.code}/api/match/${EDIT.mid}/point/undo`, {}); }
+function pt(side) { EDIT.eng.addPoint(side); renderPointEditor(); enqueue("/api/match/" + EDIT.mid + "/point", { winner_side: side }); }
+function ptUndo() { EDIT.eng.undo(); renderPointEditor(); enqueue("/api/match/" + EDIT.mid + "/point/undo", {}); }
 function toggleGrid() {
   const box = document.getElementById("gridBox");
   if (box.dataset.open) { box.dataset.open = ""; box.innerHTML = ""; return; }
@@ -221,14 +221,14 @@ function gridAdd() { const r = document.getElementById("gridRows"); const n = +r
 async function gridSave() {
   const r = document.getElementById("gridRows"); const n = +r.dataset.n; const sets = [];
   for (let i = 0; i < n; i++) sets.push([+document.getElementById(`gs${i}_1`).value || 0, +document.getElementById(`gs${i}_2`).value || 0]);
-  try { await api(`/g/${GROUP.code}/api/match/${EDIT.mid}/sets`, { sets }); EDIT = null; loadEditor(); } catch (e) { document.getElementById("edErr").textContent = e; }
+  try { await api("/api/match/" + EDIT.mid + "/sets", { sets }); EDIT = null; loadEditor(); } catch (e) { document.getElementById("edErr").textContent = e; }
 }
 async function finishMatch() {
-  try { await api(`/g/${GROUP.code}/api/match/${EDIT.mid}/finish`, {}); EDIT = null; await refreshMeta(); renderCourt(); loadEditor(); }
+  try { await api("/api/match/" + EDIT.mid + "/finish", {}); EDIT = null; await refreshMeta(); renderCourt(); loadEditor(); }
   catch (e) { const n = document.getElementById("edErr"); if (n) n.textContent = e; }
 }
 async function deleteMatch() {
-  try { await api(`/g/${GROUP.code}/api/match/${EDIT.mid}/delete`, {}); EDIT = null; await refreshMeta(); renderCourt(); loadEditor(); } catch (e) { }
+  try { await api("/api/match/" + EDIT.mid + "/delete", {}); EDIT = null; await refreshMeta(); renderCourt(); loadEditor(); } catch (e) { }
 }
 
 // ---- TT editor ----
@@ -313,7 +313,7 @@ function commitTTGame(winnerId) {
   const body = EDIT.rotKnown === false
     ? { winner: winnerId }
     : { server: EDIT.cur.server, receiver: EDIT.cur.receiver, winner: winnerId };
-  enqueue(`/g/${GROUP.code}/api/match/${EDIT.mid}/tt`, body);
+  enqueue("/api/match/" + EDIT.mid + "/tt", body);
   EDIT.gameNo += 1;
 }
 function nextTTGame() { EDIT.game = new Engine.PointMatch("singles", [EDIT.cur.server, EDIT.cur.receiver]); EDIT._pending = null; EDIT._pick = null; renderTTEditor(); }
@@ -341,6 +341,6 @@ async function savePlayed() {
   for (let i = 0; i < n; i++) sets.push([+document.getElementById(`ps${i}_1`).value || 0, +document.getElementById(`ps${i}_2`).value || 0]);
   const date = document.getElementById("playedDate").value, time = document.getElementById("playedTime").value;
   const body = Object.assign({}, startPayload(), { sets, played_on: date + (time ? " " + time : "") });
-  try { await api(`/g/${GROUP.code}/api/played`, body); err.style.color = "var(--live)"; err.textContent = "Saved ✔"; await refreshMeta(); renderCourt(); }
+  try { await api("/api/played", body); err.style.color = "var(--live)"; err.textContent = "Saved ✔"; await refreshMeta(); renderCourt(); }
   catch (e) { err.textContent = e; }
 }

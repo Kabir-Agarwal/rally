@@ -14,7 +14,7 @@ function nameBlock(name, real) {
 }
 const pBlock = (p) => nameBlock(p.name, p.real_name);
 // clickable name block -> opens that player's page (Live cards, History cards)
-const pLink = (p) => `<span class="plink" onclick="event.stopPropagation();openPlayer(${p.id})">${pBlock(p)}</span>`;
+const pLink = (p) => `<span class="plink" onclick="event.stopPropagation();openPlayer('${p.id}')">${pBlock(p)}</span>`;
 
 async function api(url, body, method) {
   const m = method || (body ? "POST" : "GET");
@@ -24,6 +24,13 @@ async function api(url, body, method) {
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw (j.error || ("error " + r.status));
   return j;
+}
+
+// Global API URL with the active group FILTER (window.FILTER; null = everything the player has).
+// G("/live") -> "/api/live" or "/api/live?group=CODE".
+function G(path) {
+  if (!window.FILTER) return "/api" + path;
+  return "/api" + path + (path.includes("?") ? "&" : "?") + "group=" + encodeURIComponent(window.FILTER);
 }
 
 // Fail-open helper: resolve to `fallback` if `p` takes longer than `ms` or rejects, so a
@@ -64,42 +71,31 @@ function showSignInGate() {
   document.querySelector(".app").appendChild(gate);
   Auth.renderSignIn(gate, () => location.reload());
 }
-function setHeaderName(name) {
-  const el2 = document.getElementById("hdName"); if (el2 && name) el2.textContent = name;
-  const sub = document.getElementById("hdSub");   // reveal code + visibility only once signed in
-  if (sub && name && window.GROUP) sub.innerHTML = "code <b>" + esc(GROUP.code) + "</b> · " + (GROUP.is_public ? "public" : "private");
+// Header shows the active group filter, or "All groups" when unfiltered.
+function setHeaderName() {
+  const nm = document.getElementById("hdName");
+  const sub = document.getElementById("hdSub");
+  if (nm) nm.textContent = window.FILTER && window.GROUP ? window.GROUP.name : "All groups";
+  if (sub) sub.innerHTML = window.FILTER && window.GROUP
+    ? "code <b>" + esc(window.GROUP.code) + "</b> · " + (window.GROUP.is_public ? "public" : "private")
+    : "tennis scorer";
 }
 
+// No group gate any more: signed in -> full app; signed out -> sign-in screen.
 async function authGate() {
-  // Signed in -> full access. Signed out: a PUBLIC group is viewable read-only; a private
-  // group shows the sign-in screen first and never reveals its name (Task A).
-  if (window.Auth && Auth.signedIn()) {
-    window.READONLY = false;
-    const me = await raceTimeout(api(`/g/${GROUP.code}/api/me`), 4000, null);
-    if (me && me.group_name) setHeaderName(me.group_name);
-    return true;
-  }
-  if (GROUP.is_public) {
-    window.READONLY = true;                 // public: read-only viewing, no writes/identity
-    const banner = el(`<div id="roBanner" class="robanner">Viewing read-only ·
-      <a href="#" onclick="showSignInGate();return false">Sign in to play</a></div>`);
-    const tc = document.getElementById("tabContent");
-    tc.parentNode.insertBefore(banner, tc);
-    return true;
-  }
-  showSignInGate();                          // private + signed out
+  window.READONLY = false;
+  if (window.Auth && Auth.signedIn()) { setHeaderName(); return true; }
+  showSignInGate();
   return false;
 }
 
 async function ensureIdentity() {
-  ME = await raceTimeout(api(`/g/${GROUP.code}/api/me`), 4000, { signed_in: false, player_id: null });
-  if (ME.group_name) setHeaderName(ME.group_name);
-  if (ME.signed_in && !ME.player_id) return await chooseName();
+  ME = await raceTimeout(api("/api/me"), 4000, { signed_in: false, player_id: null });
+  if (ME.signed_in && !ME.player_id) return await chooseName();   // first sign-in: pick a name
   return true;
 }
 
-// Self-serve "Choose your name" screen (Task B). Default = create a new name; a small
-// secondary link lets someone claim a player an admin pre-created.
+// First sign-in: create the global player (game name + optional real name). One screen.
 async function chooseName() {
   return new Promise((resolve) => {
     const tc = document.getElementById("tabContent");
@@ -115,9 +111,7 @@ async function chooseName() {
         <input id="nmReal" placeholder="optional" autocomplete="off" maxlength="40" value="${prefill}">
         <button class="btn" style="margin-top:10px" id="nmGo">Continue</button>
         <div class="err" id="nmErr"></div>
-        <div style="text-align:center;margin-top:12px;font-size:13px"><a href="#" id="nmClaim">I'm already in this group</a></div>
-      </div>
-      <div id="claimBox"></div></div>`);
+      </div></div>`);
     document.querySelector(".app").appendChild(ov);
     const err = ov.querySelector("#nmErr");
     ov.querySelector("#nmGo").onclick = async () => {
@@ -126,50 +120,33 @@ async function chooseName() {
       const real_name = ov.querySelector("#nmReal").value;
       if (!name) { err.textContent = "please enter a game name"; return; }
       try {
-        await api(`/g/${GROUP.code}/api/claim-name`, { name, real_name });
-        ME = await api(`/g/${GROUP.code}/api/me`);
+        await api("/api/me/claim", { name, real_name });
+        ME = await api("/api/me");
         ov.remove(); if (tc) tc.style.display = ""; resolve(true);
-      } catch (e) { err.textContent = e; }        // duplicate/empty -> message + retry
+      } catch (e) { err.textContent = e; }
     };
     ov.querySelector("#nmReal").addEventListener("keydown", e => { if (e.key === "Enter") ov.querySelector("#nmGo").click(); });
-    ov.querySelector("#nmClaim").onclick = async (e) => {
-      e.preventDefault();
-      const box = ov.querySelector("#claimBox");
-      const meta = await api(`/g/${GROUP.code}/api/meta`);
-      const others = meta.players;
-      box.innerHTML = `<div class="card"><div style="font-weight:800">Claim your existing player</div>
-        <div class="muted" style="margin:2px 0 8px">Pick the name an admin already created for you.</div>
-        <div class="chips" id="claimChips"></div><div class="err" id="claimErr"></div></div>`;
-      const chips = box.querySelector("#claimChips");
-      if (!others.length) chips.innerHTML = '<span class="muted">No players yet — just create your name above.</span>';
-      others.forEach(p => {
-        const chip = el(`<div class="chip">${esc(p.name)}</div>`);
-        chip.onclick = async () => {
-          try {
-            await api(`/g/${GROUP.code}/api/link`, { player_id: p.id });
-            ME = await api(`/g/${GROUP.code}/api/me`);
-            ov.remove(); if (tc) tc.style.display = ""; resolve(true);
-          } catch (e2) { box.querySelector("#claimErr").textContent = e2; }
-        };
-        chips.appendChild(chip);
-      });
-    };
   });
 }
 
-// ---------- header switcher ----------
+// ---------- header switcher: a FILTER, not a gate. "All groups" + each of the player's groups.
 async function openSwitcher() {
   const s = document.getElementById("switcher"); if (!s) return; s.classList.add("open");
-  const list = document.getElementById("switcherList"); const gs = LS.groups();
-  list.innerHTML = gs.length ? "" : '<div class="muted">No other groups yet.</div>';
-  gs.forEach(async g => {
-    const cur = g.code === GROUP.code;
-    const row = el(`<div class="grp"><span class="gname">${esc(g.name)}${cur ? ' <span class="tickmark">✓</span>' : ''}</span>
-      <span class="tag">${g.code}</span><span class="dw"></span></div>`);
-    row.onclick = () => { if (!cur) location.href = "/g/" + g.code + "/live"; };
-    list.appendChild(row);
-    try { const d = await api(`/g/${g.code}/api/live`); if (d.matches.length) row.querySelector(".dw").innerHTML = '<span class="dot pulse"></span>'; } catch (e) { }
-  });
+  const list = document.getElementById("switcherList"); list.innerHTML = "";
+  const pick = (code, name) => {
+    window.FILTER = code; if (code) { window.GROUP = { code, name, is_public: true }; } else { window.GROUP = null; }
+    setHeaderName(); closeSwitcher();
+    history.replaceState({}, "", code ? "/g/" + code + "/live" : "/"); renderTab(CURRENT_TAB || "live");
+  };
+  const rowEl = (label, code, name, cur) => {
+    const row = el(`<div class="grp"><span class="gname">${esc(label)}${cur ? ' <span class="tickmark">✓</span>' : ''}</span>${code ? `<span class="tag">${esc(code)}</span>` : ''}</div>`);
+    row.onclick = () => pick(code, name); list.appendChild(row);
+  };
+  rowEl("All groups", null, null, !window.FILTER);
+  try {
+    const d = await api("/api/groups");
+    (d.groups || []).forEach(g => rowEl(g.name, g.code, g.name, window.FILTER === g.code));
+  } catch (e) { }
 }
 function closeSwitcher() { const s = document.getElementById("switcher"); if (s) s.classList.remove("open"); }
 
@@ -235,7 +212,7 @@ function broadcastCard(m) {
 // ================= LIVE =================
 function initLive() {
   poll(async () => {
-    const d = await api(`/g/${GROUP.code}/api/live`);
+    const d = await api(G("/live"));
     const host = document.getElementById("liveMatches"); host.innerHTML = "";
     if (!d.matches.length) host.appendChild(el(`<div class="empty">No live matches. Start one in Log.</div>`));
     d.matches.forEach(m => host.appendChild(broadcastCard(m)));
@@ -257,17 +234,17 @@ function setRankOpt(kind, val, btn) {
   RANK[kind] = val; loadRanks();
 }
 async function loadRanks() {
-  RANK.data = await api(`/g/${GROUP.code}/api/leaderboard?scope=${RANK.scope}&mode=${RANK.mode}`);
+  RANK.data = await api(G("/leaderboard?mode=" + RANK.mode));
   renderRanks();
 }
 function rankRow(r, mePid) {
-  const you = r.id == mePid && RANK.scope === "group";
+  const you = r.id == mePid;
   const dot = r.live ? '<span class="dot pulse"></span>' : '<span class="dotspace"></span>';
   const tag = r.group ? `<span class="tag">${esc(r.group)}</span>` : "";
   const rating = dispFromEloRow(r);
   const v = r.rating - 1200;
   const cls = v > 0 ? "pos" : v < 0 ? "neg" : "zero";
-  return `<div class="lbrow ${you ? 'you' : ''}" onclick="openPlayer(${r.id})">
+  return `<div class="lbrow ${you ? 'you' : ''}" onclick="openPlayer('${r.id}')">
     <div class="rk">${r.rank || '–'}</div>${av(r.name)}
     <div class="nm">${dot}${pBlock(r)}${tag}${you ? ' <span class="youpill">YOU</span>' : ''}<div class="tapstats">tap for stats</div></div>
     <div class="rt ${cls}">${rating}</div></div>`;
@@ -281,9 +258,9 @@ function renderRanks() {
   const filt = a => a.filter(r => r.name.toLowerCase().includes(q));
   const ranked = filt(RANK.data.ranked), prov = filt(RANK.data.provisional);
   const yc = document.getElementById("youCard"); yc.innerHTML = "";
-  if (ME.player_id && RANK.scope === "group") {
+  if (ME.player_id) {
     const you = RANK.data.ranked.find(r => r.id == ME.player_id);
-    if (you) yc.appendChild(el(`<div class="youcard" onclick="openPlayer(${you.id})">${av(you.name)}
+    if (you) yc.appendChild(el(`<div class="youcard" onclick="openPlayer('${you.id}')">${av(you.name)}
       <div style="flex:1">${pBlock(you)} <span class="youpill">YOU</span></div>
       <div>#${you.rank} · <b>${dispFromEloRow(you)}</b></div></div>`));
   }
@@ -291,7 +268,7 @@ function renderRanks() {
   const provWrap = document.getElementById("provWrap");
   provWrap.innerHTML = prov.length
     ? `<div class="sec-title">Minimum 5 matches</div><div class="card" style="padding:2px 2px">` +
-      prov.map(r => `<div class="lbrow" onclick="openPlayer(${r.id})"><div class="rk">–</div>${av(r.name)}
+      prov.map(r => `<div class="lbrow" onclick="openPlayer('${r.id}')"><div class="rk">–</div>${av(r.name)}
         <div class="nm">${r.live ? '<span class="dot pulse"></span>' : '<span class="dotspace"></span>'}${pBlock(r)}${r.group ? `<span class="tag">${esc(r.group)}</span>` : ''}</div>
         <div class="rt">${dispFromEloRow(r)} <span class="pill">${r.n} of 5</span></div></div>`).join("") + `</div>`
     : "";
@@ -373,8 +350,8 @@ async function saveName() {
   const real_name = document.getElementById("enReal").value;
   if (!name) { err.textContent = "game name is required"; return; }
   try {
-    await api(`/g/${GROUP.code}/api/rename-me`, { name, real_name });
-    ME = await api(`/g/${GROUP.code}/api/me`);
+    await api("/api/me/rename", { name, real_name });
+    ME = await api("/api/me");
     setHeaderName(ME.group_name);
     renderYouCard();                                 // collapses the editor + shows the new name
   } catch (e) { err.textContent = e; }
@@ -383,36 +360,36 @@ async function initGroups() {
   renderYouCard();
   renderGroupRows();
 }
-// YOUR GROUPS: one card per group (mockup) — 🎾 name + green "· current", "code XXXX ·
-// private/public", and a Make public/private toggle.
-function renderGroupRows() {
-  const host = document.getElementById("groupRows"); const gs = LS.groups(); host.innerHTML = "";
+// YOUR GROUPS: one card per group (from /api/groups) — 🎾 name, "code XXXX · private/public",
+// tap to filter to that group, admin-only Make public/private.
+async function renderGroupRows() {
+  const host = document.getElementById("groupRows"); host.innerHTML = "";
+  let gs = [];
+  try { gs = (await api("/api/groups")).groups || []; } catch (e) { }
   if (!gs.length) { host.innerHTML = '<div class="card"><div class="empty">No groups yet.</div></div>'; return; }
-  gs.forEach(async g => {
-    const cur = g.code === GROUP.code;
+  gs.forEach(g => {
+    const cur = g.code === window.FILTER;
     const card = el(`<div class="card">
       <div class="row">
         <div style="flex:1">
-          <div style="font-weight:800;font-size:14px">🎾 ${esc(g.name)}${cur ? ' <span class="curmark">· current</span>' : ''} <span class="dw"></span></div>
+          <div style="font-weight:800;font-size:14px">🎾 ${esc(g.name)}${cur ? ' <span class="curmark">· current</span>' : ''}</div>
           <div class="muted" style="margin-top:2px">code ${esc(g.code)} · ${g.is_public ? 'public' : 'private'}</div>
         </div>
-        <button class="btn sm ${g.is_public ? 'clay' : 'ghost'}" style="flex:0 0 auto" onclick="event.stopPropagation();flipPublic('${g.code}',this)">${g.is_public ? 'Make private' : 'Make public'}</button>
+        ${g.is_admin ? `<button class="btn sm ${g.is_public ? 'clay' : 'ghost'}" style="flex:0 0 auto" onclick="event.stopPropagation();flipPublic('${g.id}',${g.is_public ? 'true' : 'false'},this)">${g.is_public ? 'Make private' : 'Make public'}</button>` : ''}
       </div></div>`);
-    if (!cur) { card.style.cursor = "pointer"; card.onclick = () => location.href = "/g/" + g.code + "/live"; }
+    card.style.cursor = "pointer";
+    card.onclick = () => location.href = "/g/" + g.code + "/live";
     host.appendChild(card);
-    try { const d = await api(`/g/${g.code}/api/live`); if (d.matches.length) card.querySelector(".dw").innerHTML = '<span class="dot pulse"></span>'; } catch (e) { }
   });
 }
-async function flipPublic(code, btn) {
-  const g = LS.groups().find(x => x.code === code); const next = !(g && g.is_public);
+async function flipPublic(gid, cur, btn) {
+  const next = !cur;
   try {
-    await api(`/g/${code}/api/public`, { is_public: next });
-    if (g) { g.is_public = next; LS.add(g); }
-    if (code === GROUP.code) GROUP.is_public = next;
+    await api(`/api/group/${gid}/public`, { is_public: next });
     btn.className = "btn sm " + (next ? "clay" : "ghost"); btn.textContent = next ? "Make private" : "Make public";
+    btn.setAttribute("onclick", `event.stopPropagation();flipPublic('${gid}',${next},this)`);
     const sub = btn.closest(".card").querySelector(".muted");
-    if (sub) sub.textContent = "code " + code + " · " + (next ? "public" : "private");
-    if (code === GROUP.code) setHeaderName(ME.group_name || GROUP.name);   // header sub reflects new visibility
+    if (sub) sub.textContent = sub.textContent.replace(/(public|private)$/, next ? "public" : "private");
   } catch (e) { }
 }
 // tap-to-expand create / join (mockup): the card shows "+ …" buttons that reveal an input row.
@@ -455,7 +432,7 @@ function setHistOpt(kind, val, btn) { btn.parentElement.querySelectorAll("button
 async function loadHistory() {
   const sl = document.getElementById("histScopeLine");
   if (sl) sl.textContent = "· " + HIST_KIND_LABELS[HIST.kind] + " · " + scopeLabel(HIST.scope);
-  const d = await api(`/g/${GROUP.code}/api/history?scope=${HIST.scope}`);
+  const d = await api(G("/history"));
   const host = document.getElementById("historyList"); host.innerHTML = "";
   let matches = d.matches;
   if (HIST.kind !== "all") matches = matches.filter(m => m.kind === HIST.kind);
@@ -487,7 +464,7 @@ function historyCard(m) {
   card.querySelector(".dtedit .btn").onclick = async () => {
     const v = card.querySelector(".dtin").value; if (!v) return;
     try {
-      await api(`/g/${GROUP.code}/api/match/${m.id}/date`, { played_on: v.replace("T", " ") });
+      await api(G("/match/" + m.id + "/date"), { played_on: v.replace("T", " ") });
       card.querySelector(".whenlbl").textContent = v.replace("T", " ");
       card.querySelector(".dtedit").style.display = "none";
     } catch (e) { }
@@ -512,9 +489,9 @@ async function openPlayer(pid) {
   PLAYER_OPEN = true;
   ov.style.display = "block";
   ov.innerHTML = `<div class="card"><div class="empty">Loading…</div></div>`;
-  history.pushState({ player: pid }, "", `/g/${GROUP.code}/player/${pid}`);
+  history.pushState({ player: pid }, "", (window.FILTER ? "/g/" + window.FILTER : "") + "/player/" + pid);
   try {
-    const p = await api(`/g/${GROUP.code}/api/player/${pid}`);
+    const p = await api(G("/player/" + pid));
     renderPlayer(ov, p);
   } catch (e) { ov.innerHTML = `<div class="card"><div class="empty">Could not load player.</div><button class="btn ghost sm" onclick="closePlayer()">← Back</button></div>`; }
 }
@@ -628,7 +605,7 @@ function renderTab(tab) {
 }
 function switchTab(tab) {
   if (tab === CURRENT_TAB && !PLAYER_OPEN) return;
-  history.pushState({ tab }, "", `/g/${GROUP.code}/${TAB_URL[tab]}`);
+  history.pushState({ tab }, "", (window.FILTER ? "/g/" + window.FILTER + "/" : "/") + TAB_URL[tab]);
   renderTab(tab);
 }
 function routeFromPath() {
@@ -642,7 +619,7 @@ function routeFromPath() {
 async function openPlayerNoPush(pid) {   // for popstate/deep-link: render without pushing state
   const ov = document.getElementById("playerOverlay");
   PLAYER_OPEN = true; ov.style.display = "block"; ov.innerHTML = `<div class="card"><div class="empty">Loading…</div></div>`;
-  try { renderPlayer(ov, await api(`/g/${GROUP.code}/api/player/${pid}`)); } catch (e) { ov.innerHTML = `<div class="card"><div class="empty">Could not load player.</div></div>`; }
+  try { renderPlayer(ov, await api(G("/player/" + pid))); } catch (e) { ov.innerHTML = `<div class="card"><div class="empty">Could not load player.</div></div>`; }
 }
 window.addEventListener("popstate", () => {
   if (PLAYER_OPEN && !(history.state && history.state.player)) { closePlayer(true); return; }
@@ -684,23 +661,16 @@ function _errorCard(host) {
     <button class="btn" onclick="location.reload()">Reload</button></div>`;
 }
 function failOpen() {
-  if (window.PAGE === "landing") {
-    const host = document.getElementById("landingContent");
-    if (host && window.Auth && Auth.renderSignIn) {
-      try { Auth.renderSignIn(host, () => location.reload()); } catch (e) { _errorCard(host); }
-    } else {
-      _errorCard(host);                                 // auth.js missing -> explain, never blank
-    }
-  } else {
+  if (!(window.Auth && Auth.signedIn())) {
     try { showSignInGate(); } catch (e) { _errorCard(document.getElementById("tabContent")); }
+  } else {
+    _errorCard(document.getElementById("tabContent"));
   }
 }
 async function boot() {
   await staleTokenGuard();
-  if (window.PAGE === "landing") return initLanding();
-  if (!GROUP) return;
-  if (!(await authGate())) return;         // shows sign-in (private) or read-only (public)
-  if (!window.READONLY) { await raceTimeout(ensureIdentity(), 4000, true); }
+  if (!(await authGate())) return;         // signed out -> sign-in screen
+  await raceTimeout(ensureIdentity(), 4000, true);   // resolves/creates the global player
   const initTab = (window.INIT && TAB_URL[window.INIT.tab]) ? window.INIT.tab : "live";
   renderTab(initTab);
   setActiveNav(initTab);

@@ -332,13 +332,36 @@ function renderYouCard() {
   const host = document.getElementById("youCardG"); if (!host) return;
   const dn = ME.player_name || "—";
   const real = ME.player_real_name ? `<div class="pn-real">${esc(ME.player_real_name)}</div>` : "";
+  // Your permanent public identity is Name#CODE. Copy pastes the code into someone's search; Share
+  // sends a link that opens the app ready to friend you.
+  const code = ME.code || "";
+  const idLine = code
+    ? `<div style="margin-top:2px;font-weight:800">${esc(dn)}<span class="muted" style="font-weight:800">#${esc(code)}</span>
+         <button class="btn sm ghost" style="width:auto;padding:2px 8px;margin-left:6px" onclick="copyCode()">Copy</button>
+         <button class="btn sm ghost" style="width:auto;padding:2px 8px" onclick="shareCode()">Share</button></div>`
+    : "";
   host.innerHTML = `<div class="card">
     <div class="row">
       <span class="avatar" style="width:40px;height:40px;font-size:17px;flex:0 0 auto">${esc((dn[0] || "?").toUpperCase())}</span>
       <div style="flex:1"><div class="pn-game" style="font-size:16px">${esc(dn)} <span class="youpill">YOU</span></div>${real}
         <div class="muted">claimed on this phone</div></div>
       <button class="btn sm ghost" style="flex:0 0 auto" onclick="editName()">Change</button></div>
+    ${idLine}<div class="note" id="youMsg"></div>
     <div id="editNameBox"></div></div>`;
+}
+function _youMsg(t) { const m = document.getElementById("youMsg"); if (m) { m.textContent = t; setTimeout(() => { if (m.textContent === t) m.textContent = ""; }, 2500); } }
+function _copy(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text);
+  const ta = document.createElement("textarea"); ta.value = text; document.body.appendChild(ta); ta.select();
+  try { document.execCommand("copy"); } catch (e) { } ta.remove(); return Promise.resolve();
+}
+function copyCode() { if (!ME.code) return; _copy(ME.code).then(() => _youMsg("Code copied: " + ME.code)); }
+function addLink() { return location.origin + "/?add=" + encodeURIComponent(ME.code || ""); }
+function shareCode() {
+  if (!ME.code) return;
+  const url = addLink(), title = "Add me on Rally: " + (ME.player_name || "") + "#" + ME.code;
+  if (navigator.share) { navigator.share({ title: "Rally", text: title, url }).catch(() => { }); }
+  else { _copy(url).then(() => _youMsg("Link copied")); }
 }
 function editName() {
   const box = document.getElementById("editNameBox");
@@ -368,8 +391,72 @@ async function saveName() {
 }
 async function initGroups() {
   renderYouCard();
+  renderAddSomeone();
+  renderFriends();
   renderGroupRows();
 }
+
+// ---- Task 2: Add someone (search by game name OR code -> friend request) ----
+function renderAddSomeone() {
+  const host = document.getElementById("addSomeone"); if (!host) return;
+  host.innerHTML = `<div class="card">
+    <input id="friendSearch" placeholder="Game name or player code" oninput="searchFriends()" autocomplete="off">
+    <div id="friendSearchOut" style="margin-top:6px"></div></div>`;
+  const code = new URLSearchParams(location.search).get("add");   // /?add=CODE deep link
+  if (code) { host.querySelector("#friendSearch").value = code; searchFriends(); }
+}
+let _searchT = null;
+function searchFriends() {
+  clearTimeout(_searchT);
+  _searchT = setTimeout(async () => {
+    const inp = document.getElementById("friendSearch"), out = document.getElementById("friendSearchOut");
+    if (!inp || !out) return;
+    const q = inp.value.trim();
+    if (!q) { out.innerHTML = ""; return; }
+    let players;
+    try { players = (await api("/api/players/search?q=" + encodeURIComponent(q))).players || []; }
+    catch (e) { out.innerHTML = `<div class="muted">Couldn't search — try again</div>`; return; }
+    players = players.filter(p => p.id !== ME.player_id);        // never offer yourself
+    if (!players.length) { out.innerHTML = `<div class="muted">No player found for “${esc(q)}”.</div>`; return; }
+    out.innerHTML = players.map(p => `<div class="lbrow" style="cursor:default;flex-wrap:wrap">
+      ${av(p.name)}<div class="nm">${pBlock(p)}<span class="tag">#${esc(p.code)}</span></div>
+      <button class="btn sm clay" style="width:auto;flex:0 0 auto" onclick="addFriend('${p.id}',this)">Add friend</button>
+      <div class="err" style="flex-basis:100%" id="fre_${p.id}"></div></div>`).join("");
+  }, 250);
+}
+async function addFriend(pid, btn) {
+  const err = document.getElementById("fre_" + pid); if (err) err.textContent = "";
+  try {
+    const r = await api("/api/friend/request", { id: pid });
+    btn.outerHTML = `<span class="muted" style="flex:0 0 auto">${r.status === "accepted" ? "friends ✓" : "requested"}</span>`;
+    renderFriends();                                             // reflect a reciprocal auto-accept
+  } catch (e) { if (err) err.textContent = "Couldn't send: " + e; }   // never a dead tap
+}
+
+// ---- Tasks 3 & 4: Friend requests (only when incoming) + Friends list (feeds the picker) ----
+async function renderFriends() {
+  const reqHost = document.getElementById("friendReqs"), listHost = document.getElementById("friendsList");
+  let d;
+  try { d = await api("/api/friends"); }
+  catch (e) { if (listHost) listHost.innerHTML = `<div class="card"><div class="empty">Couldn't load friends — <a href="#" onclick="renderFriends();return false">retry</a></div></div>`; return; }
+  if (reqHost) {
+    reqHost.innerHTML = (d.pending && d.pending.length)
+      ? `<div class="sec-title">Friend requests</div><div class="card" style="padding:2px 2px">` +
+        d.pending.map(p => `<div class="lbrow" style="cursor:default;flex-wrap:wrap">${av(p.name)}
+          <div class="nm">${pBlock(p)}<span class="tag">#${esc(p.code)}</span></div>
+          <button class="btn sm ghost" style="width:auto;flex:0 0 auto" onclick="declineFriend('${p.id}')">Decline</button>
+          <button class="btn sm clay" style="width:auto;flex:0 0 auto" onclick="acceptFriend('${p.id}')">Accept</button></div>`).join("") + `</div>`
+      : "";
+  }
+  if (listHost) {
+    listHost.innerHTML = (d.friends && d.friends.length)
+      ? `<div class="card" style="padding:2px 2px">` + d.friends.map(p => `<div class="lbrow" onclick="openPlayer('${p.id}')">
+          ${av(p.name)}<div class="nm">${pBlock(p)}<span class="tag">#${esc(p.code)}</span></div></div>`).join("") + `</div>`
+      : `<div class="card"><div class="empty">No friends yet. Adding a friend is how you get someone into a match.</div></div>`;
+  }
+}
+async function acceptFriend(pid) { try { await api("/api/friend/accept", { id: pid }); renderFriends(); } catch (e) { } }
+async function declineFriend(pid) { try { await api("/api/friend/decline", { id: pid }); renderFriends(); } catch (e) { } }
 // YOUR GROUPS: one card per group (from /api/groups) — 🎾 name, "code XXXX · private/public",
 // tap to filter to that group, admin-only Make public/private.
 // ATOMIC: fetch first, build off-screen, then swap in ONE operation. Never blank #groupRows before
@@ -607,6 +694,9 @@ const TAB_SKELETONS = {
     <div id="provWrap"></div>`,
   log: `<div id="logRoot"><div class="empty">Loading…</div></div>`,
   groups: `<div class="sec-title">You</div><div id="youCardG"></div>
+    <div class="sec-title">Add someone</div><div id="addSomeone"></div>
+    <div id="friendReqs"></div>
+    <div class="sec-title">Friends</div><div id="friendsList"></div>
     <div id="justCreated"></div>
     <div class="sec-title">Your groups</div><div id="groupRows"></div>
     <div class="card">
@@ -726,7 +816,8 @@ function failOpen() {
 async function boot() {
   await staleTokenGuard();
   if (!(await authGate())) return;         // signed out -> sign-in screen
-  const initTab = (window.INIT && TAB_URL[window.INIT.tab]) ? window.INIT.tab : "live";
+  let initTab = (window.INIT && TAB_URL[window.INIT.tab]) ? window.INIT.tab : "live";
+  if (new URLSearchParams(location.search).get("add")) initTab = "groups";   // /?add=CODE -> Add someone
   // Render what we have NOW: paint the tab immediately (its data fetch fires right away) and resolve
   // identity IN PARALLEL, instead of blocking first paint on a second sequential token-verify.
   const idP = raceTimeout(ensureIdentity(), 10000, true);

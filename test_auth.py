@@ -79,6 +79,31 @@ def test_identity_is_the_token_stable_across_devices(tmp_path):
     assert pid1 == pid2
 
 
+def test_friend_request_accept_then_appears_in_meta(tmp_path):
+    # Task 5 chain (server side): request -> shows as pending -> accept -> both see each other in the
+    # court-picker roster (/api/meta). Accept/decline routes exercised.
+    appmod, c = _fresh(tmp_path)
+    a, ha = signin(c, "a", "Ann")
+    b, hb = signin(c, "b", "Bob")
+    assert c.post("/api/friend/request", json={"id": b}, headers=ha).json()["status"] == "pending"
+    assert a in [x["id"] for x in c.get("/api/friends", headers=hb).json()["pending"]]   # b sees it
+    assert a not in [p["id"] for p in c.get("/api/meta", headers=hb).json()["players"]]  # not yet a friend
+    c.post("/api/friend/accept", json={"id": a}, headers=hb)                             # b accepts
+    assert b in [p["id"] for p in c.get("/api/meta", headers=ha).json()["players"]]      # now in each other's picker
+    assert a in [p["id"] for p in c.get("/api/meta", headers=hb).json()["players"]]
+
+
+def test_friend_request_by_code_and_decline(tmp_path):
+    appmod, c = _fresh(tmp_path)
+    a, ha = signin(c, "a", "Ann")
+    b, hb = signin(c, "b", "Bob")
+    bcode = c.get("/api/me", headers=hb).json()["code"]
+    assert c.post("/api/friend/request", json={"code": bcode}, headers=ha).status_code == 200   # request by CODE
+    c.post("/api/friend/decline", json={"id": a}, headers=hb)                                    # b declines
+    assert not c.get("/api/friends", headers=hb).json()["pending"]                               # request gone
+    assert a not in [p["id"] for p in c.get("/api/meta", headers=hb).json()["players"]]
+
+
 def test_picker_always_includes_self_even_with_zero_friends(tmp_path):
     # Task 4: with no friends, /api/meta offers exactly one placeable chip — you.
     appmod, c = _fresh(tmp_path)

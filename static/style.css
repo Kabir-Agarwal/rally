@@ -148,6 +148,15 @@ input,select{font:inherit;padding:11px 12px;border:1.5px solid var(--line);borde
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:60;display:flex;align-items:flex-start;justify-content:center}
 .modal .sheet3{background:var(--cream);border-radius:16px;padding:16px;margin-top:60px;width:88%;max-width:380px}
 
+/* player bottom sheet (Ranks) + toast — reuse card/btn styles, no tab restyle */
+.psheet{position:fixed;inset:0;background:rgba(43,33,28,.45);z-index:60;display:flex;align-items:flex-end;justify-content:center}
+.psheet .psheet-body{width:100%;max-width:412px;margin:0;border-radius:16px 16px 0 0;animation:sheetup .18s ease}
+@keyframes sheetup{from{transform:translateY(30px);opacity:.6}to{transform:none;opacity:1}}
+.toast{position:fixed;left:50%;bottom:74px;transform:translateX(-50%) translateY(20px);background:var(--ink);color:#fff;
+  padding:10px 16px;border-radius:12px;font-size:13px;font-weight:700;z-index:80;opacity:0;pointer-events:none;
+  transition:opacity .2s,transform .2s;max-width:88%;text-align:center}
+.toast.show{opacity:.96;transform:translateX(-50%) translateY(0)}
+
 /* funnel */
 .funnel{margin:8px 16px;background:var(--cream);border:1px solid var(--line);border-radius:12px;padding:10px}
 .funnelrow{display:flex;align-items:center;gap:8px;margin:6px 0}

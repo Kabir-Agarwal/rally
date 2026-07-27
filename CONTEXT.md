@@ -1,5 +1,37 @@
 # CONTEXT.md — Rally (tennis scorer)
 
+## Ranks add-friend + group join-link + create-dup fix (2026-07-27) — deployed (latest)
+100 Python + 3 Node green. Browser-verified in mock mode (one session, seeded players).
+- **Task 1 — group-create "duplicate" (REAL cause).** NOT an optimistic double-insert. `createGroup`
+  wrote a persistent "✔ created / share this code" card into `#justCreated` AND `renderGroupRows`
+  rendered the same group into `#groupRows` right below it — two cards for one group, stacked. Fix:
+  deleted the `#justCreated` card entirely (the group now shows once in Your Groups, with its own
+  Copy/Share); a brief `toast()` confirms. `renderGroupRows` uses `replaceChildren`, so it never
+  double-appends. **Double tap COULD previously create two real groups** (no in-flight guard → two
+  POST /api/group/create). Fixed: Create button disables + guards while the request is in flight.
+  Verified: creating a group yields exactly ONE card; two simultaneous createGroup() calls made ONE
+  group.
+- **Task 2 — share a group by link.** Each group card got Copy + Share next to the code (mirrors the
+  YOU-card friend link). Link = origin + "/?join=<GROUP CODE>". Share = navigator.share, clipboard
+  fallback. `/?join=CODE` on boot: `storePendingJoin()` persists the code to localStorage BEFORE any
+  sign-in redirect (so it survives OAuth), `completePendingJoin()` runs once a signed-in player
+  exists. Verified all four: public→"Joined <name>" + FILTER set + lands on /g/CODE/live; private→
+  "Requested… waiting for the admin"; unknown→"no group with that code" (not silent); signed-out→code
+  persisted through, completed after sign-in. Joining a group does NOT create a friendship (verified:
+  fresh player stays rel=none after join).
+- **Task 3 — add a friend from the leaderboard.** Server: `/api/leaderboard` rows now carry `code`
+  and `rel` (you/friend/sent/incoming/none) via `_relationship`. Tapping a Ranks row opens a bottom
+  sheet (`.psheet`, reuses card/btn styles): Name#CODE, rating · N matches, "See stats" (= old tap),
+  and an Add-friend control whose state = reality — own row: none; friend: "Already a friend"; sent:
+  "Friend request sent"; else (none/incoming): active "Add friend" → POST /api/friend/request (an
+  incoming request auto-accepts). Each row's subtitle now shows the relationship in plain words
+  (you/friend/requested/not a friend). All four states + both Add actions verified in-browser; test
+  `test_leaderboard_carries_code_and_relationship`.
+- **UNVERIFIED BY ME (needs his two phones):** real Google sign-in, the mobile navigator.share
+  Copy/Share sheet, and the signed-OUT→sign-in→auto-join round trip through actual Supabase OAuth
+  (the query-drop that `storePendingJoin` guards against only happens on a real OAuth redirect). All
+  logic exercised here with mock guest tokens + direct completePendingJoin/deep-link calls.
+
 ## State
 Working, tested, verified end-to-end. Built locally, **not deployed**.
 Product name is **Rally**, subtitle **"tennis scorer"** (header, titles, README, Docker labels).

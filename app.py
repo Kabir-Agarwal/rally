@@ -209,7 +209,21 @@ def _pblock(p):
     return {"id": p["id"], "name": p["game_name"], "real_name": p["real_name"], "code": p["code"]}
 
 
-def leaderboard_rows(con, group_id, mode):
+def _relationship(con, me_pid, other_id):
+    """ME's standing relationship to a player: you / friend / sent / incoming / none."""
+    if me_pid and me_pid == other_id:
+        return "you"
+    if not me_pid:
+        return "none"
+    f = db.friendship(con, me_pid, other_id)
+    if not f:
+        return "none"
+    if f["status"] == "accepted":
+        return "friend"
+    return "sent" if f["requested_by"] == me_pid else "incoming"
+
+
+def leaderboard_rows(con, group_id, mode, me_pid=None):
     st = db.rating_state(con, group_id)
     live_ids = live_player_ids(con)
     if group_id:
@@ -220,6 +234,7 @@ def leaderboard_rows(con, group_id, mode):
     for p in players:
         n = st[mode + "_n"].get(p["id"], 0)
         rows.append({"id": p["id"], "name": p["game_name"], "real_name": p["real_name"],
+                     "code": p["code"], "rel": _relationship(con, me_pid, p["id"]),
                      "rating": round(st[mode].get(p["id"], START)), "n": n,
                      "provisional": n < ratings.MIN_MATCHES, "live": p["id"] in live_ids, "group": None})
     return rows
@@ -484,7 +499,8 @@ def api_meta(request: Request):
 def api_leaderboard(request: Request, mode: str = "singles"):
     con = get_con()
     gid = _gid_from_query(con, request)
-    ranked, prov = ranked_and_provisional(leaderboard_rows(con, gid, mode))
+    u, p = me_player(con, request)
+    ranked, prov = ranked_and_provisional(leaderboard_rows(con, gid, mode, p["id"] if p else None))
     con.close()
     return {"ranked": ranked, "provisional": prov, "scope": "group" if gid else "everyone", "mode": mode}
 

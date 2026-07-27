@@ -16,6 +16,15 @@ const pBlock = (p) => nameBlock(p.name, p.real_name);
 // clickable name block -> opens that player's page (Live cards, History cards)
 const pLink = (p) => `<span class="plink" onclick="event.stopPropagation();openPlayer('${p.id}')">${pBlock(p)}</span>`;
 
+// One transient bottom toast (create-on-demand, auto-dismiss). Not a tab restyle.
+let _toastT = null;
+function toast(msg) {
+  let t = document.getElementById("toast");
+  if (!t) { t = el(`<div id="toast" class="toast"></div>`); document.body.appendChild(t); }
+  t.textContent = msg; t.classList.add("show");
+  clearTimeout(_toastT); _toastT = setTimeout(() => t.classList.remove("show"), 3200);
+}
+
 async function api(url, body, method) {
   const m = method || (body ? "POST" : "GET");
   const opt = { method: m, headers: { ...authHeaders() } };
@@ -245,6 +254,11 @@ async function loadRanks() {
   RANK.data = d;
   renderRanks();
 }
+// relationship of ME to a player, in plain words (server sends r.rel: you/friend/sent/incoming/none)
+function relLabel(rel) {
+  return rel === "you" ? "you" : rel === "friend" ? "friend"
+    : (rel === "sent" || rel === "incoming") ? "requested" : "not a friend";
+}
 function rankRow(r, mePid) {
   const you = r.id == mePid;
   const dot = r.live ? '<span class="dot pulse"></span>' : '<span class="dotspace"></span>';
@@ -252,9 +266,9 @@ function rankRow(r, mePid) {
   const rating = dispFromEloRow(r);
   const v = r.rating - 1200;
   const cls = v > 0 ? "pos" : v < 0 ? "neg" : "zero";
-  return `<div class="lbrow ${you ? 'you' : ''}" onclick="openPlayer('${r.id}')">
+  return `<div class="lbrow ${you ? 'you' : ''}" onclick="openPlayerSheet('${r.id}')">
     <div class="rk">${r.rank || '–'}</div>${av(r.name)}
-    <div class="nm">${dot}${pBlock(r)}${tag}${you ? ' <span class="youpill">YOU</span>' : ''}<div class="tapstats">tap for stats</div></div>
+    <div class="nm">${dot}${pBlock(r)}${tag}${you ? ' <span class="youpill">YOU</span>' : ''}<div class="tapstats">${relLabel(r.rel)}</div></div>
     <div class="rt ${cls}">${rating}</div></div>`;
 }
 const dispFromEloRow = (r) => { const v = r.rating - 1200; return (v > 0 ? "+" : "") + v; };
@@ -276,12 +290,49 @@ function renderRanks() {
   const provWrap = document.getElementById("provWrap");
   provWrap.innerHTML = prov.length
     ? `<div class="sec-title">Minimum 5 matches</div><div class="card" style="padding:2px 2px">` +
-      prov.map(r => `<div class="lbrow" onclick="openPlayer('${r.id}')"><div class="rk">–</div>${av(r.name)}
-        <div class="nm">${r.live ? '<span class="dot pulse"></span>' : '<span class="dotspace"></span>'}${pBlock(r)}${r.group ? `<span class="tag">${esc(r.group)}</span>` : ''}</div>
+      prov.map(r => `<div class="lbrow" onclick="openPlayerSheet('${r.id}')"><div class="rk">–</div>${av(r.name)}
+        <div class="nm">${r.live ? '<span class="dot pulse"></span>' : '<span class="dotspace"></span>'}${pBlock(r)}${r.group ? `<span class="tag">${esc(r.group)}</span>` : ''}<div class="tapstats">${relLabel(r.rel)}</div></div>
         <div class="rt">${dispFromEloRow(r)} <span class="pill">${r.n} of 5</span></div></div>`).join("") + `</div>`
     : "";
 }
 function initRanks() { loadRanks(); poll(async () => { await loadRanks(); }, 5000); }
+
+// ---- Ranks bottom sheet: Name#CODE, rating + matches, See stats, Add friend (state = reality) ----
+function _rankById(pid) {
+  const d = RANK.data; if (!d) return null;
+  return (d.ranked || []).concat(d.provisional || []).find(r => r.id == pid) || null;
+}
+function openPlayerSheet(pid) {
+  const r = _rankById(pid);
+  if (!r) return openPlayer(pid);                 // no cached row -> straight to stats
+  const rating = dispFromEloRow(r);
+  let addBtn;                                      // state reflects the real relationship
+  if (r.rel === "you") addBtn = "";               // your own row: no add button
+  else if (r.rel === "friend") addBtn = `<span class="muted" style="flex:1;text-align:center">Already a friend</span>`;
+  else if (r.rel === "sent") addBtn = `<span class="muted" style="flex:1;text-align:center">Friend request sent</span>`;
+  else addBtn = `<button class="btn sm clay" style="flex:1" onclick="sheetAddFriend('${r.id}',this)">Add friend</button>`;
+  const sh = el(`<div class="psheet" id="playerSheet" onclick="if(event.target.id=='playerSheet')closeSheet()">
+    <div class="psheet-body card">
+      <div class="row"><span class="avatar" style="width:40px;height:40px;font-size:17px;flex:0 0 auto">${esc((r.name[0] || '?').toUpperCase())}</span>
+        <div style="flex:1"><div class="pn-game" style="font-size:16px">${esc(r.name)}<span class="muted" style="font-weight:800">#${esc(r.code || '')}</span></div>
+          ${r.real_name ? `<div class="pn-real">${esc(r.real_name)}</div>` : ''}
+          <div class="muted" style="margin-top:2px">${rating} · ${r.n} match${r.n === 1 ? '' : 'es'}</div></div></div>
+      <div id="sheetErr" class="err"></div>
+      <div class="row" style="margin-top:10px;gap:8px">
+        <button class="btn sm ghost" style="flex:1" onclick="closeSheet();openPlayer('${r.id}')">See stats</button>
+        ${addBtn}</div></div></div>`);
+  document.body.appendChild(sh);
+}
+function closeSheet() { const s = document.getElementById("playerSheet"); if (s) s.remove(); }
+async function sheetAddFriend(pid, btn) {
+  const err = document.getElementById("sheetErr"); if (err) err.textContent = "";
+  try {
+    const rr = await api("/api/friend/request", { id: pid });
+    btn.outerHTML = `<span class="muted" style="flex:1;text-align:center">${rr.status === "accepted" ? "Already a friend" : "Friend request sent"}</span>`;
+    const row = _rankById(pid); if (row) row.rel = rr.status === "accepted" ? "friend" : "sent";  // row subtitle updates too
+    renderRanks();
+  } catch (e) { if (err) err.textContent = "Couldn't send: " + e; }   // never a dead tap
+}
 
 // ---------- funnel drawer (Ranks + History filters) ----------
 const HIST_KIND_LABELS = { all: "All", singles: "Singles", doubles: "Doubles", tt: "Triple threat" };
@@ -362,6 +413,14 @@ function shareCode() {
   const url = addLink(), title = "Add me on Rally: " + (ME.player_name || "") + "#" + ME.code;
   if (navigator.share) { navigator.share({ title: "Rally", text: title, url }).catch(() => { }); }
   else { _copy(url).then(() => _youMsg("Link copied")); }
+}
+// Group join link — mirrors the friend /?add=CODE link. origin + /?join=<GROUP CODE>.
+function joinLink(code) { return location.origin + "/?join=" + encodeURIComponent(code); }
+function copyJoin(code) { _copy(joinLink(code)).then(() => toast("Join link copied")); }
+function shareJoin(code) {
+  const url = joinLink(code);
+  if (navigator.share) navigator.share({ title: "Rally", text: "Join my group on Rally", url }).catch(() => { });
+  else _copy(url).then(() => toast("Join link copied"));
 }
 function editName() {
   const box = document.getElementById("editNameBox");
@@ -484,7 +543,9 @@ async function renderGroupRows() {
       <div class="row">
         <div style="flex:1">
           <div style="font-weight:800;font-size:14px">🎾 ${esc(g.name)}${cur ? ' <span class="curmark">· current</span>' : ''}</div>
-          <div class="muted" style="margin-top:2px">code ${esc(g.code)} · ${g.is_public ? 'public' : 'private'}</div>
+          <div class="muted" style="margin-top:2px">code ${esc(g.code)} · ${g.is_public ? 'public' : 'private'}
+            <button class="btn sm ghost" style="width:auto;padding:2px 8px;margin-left:6px" onclick="event.stopPropagation();copyJoin('${g.code}')">Copy</button>
+            <button class="btn sm ghost" style="width:auto;padding:2px 8px" onclick="event.stopPropagation();shareJoin('${g.code}')">Share</button></div>
         </div>
       </div>
       <div class="row" style="margin-top:8px;gap:8px;justify-content:flex-end" id="ga_${g.id}">${adminBtn}${exitBtn}</div>
@@ -531,7 +592,7 @@ async function flipPublic(gid, cur, btn) {
 function toggleCreate() {
   const host = document.getElementById("createRow");
   host.innerHTML = `<div class="row"><input id="newGroupName" placeholder="Group name" autofocus>
-    <button class="btn sm" style="flex:0 0 auto" onclick="createGroup()">Create</button></div><div id="createOut" class="note"></div>`;
+    <button class="btn sm" id="createBtn" style="flex:0 0 auto" onclick="createGroup()">Create</button></div><div id="createOut" class="note"></div>`;
   const inp = host.querySelector("#newGroupName");
   inp.focus(); inp.addEventListener("keydown", e => { if (e.key === "Enter") createGroup(); });
 }
@@ -543,17 +604,20 @@ function toggleJoin() {
   inp.focus(); inp.addEventListener("keydown", e => { if (e.key === "Enter") joinGroup(); });
 }
 async function createGroup() {
+  const btn = document.getElementById("createBtn");
   const name = document.getElementById("newGroupName").value.trim(); const out = document.getElementById("createOut");
   if (!name) { out.textContent = "name required"; return; }
+  if (btn) { if (btn.disabled) return; btn.disabled = true; btn.textContent = "Creating…"; }  // in-flight guard: a double tap can't fire two creates
+  out.textContent = "";
   try {
     const g = await api("/api/group/create", { name }); LS.add(g);
-    document.getElementById("justCreated").innerHTML = `<div class="card" style="border:2px solid var(--clay)">
-      <div style="font-weight:800">✔ ${esc(g.name)} created</div>
-      <div style="margin-top:4px">Share this code with your friends: <b style="font-size:16px;letter-spacing:2px">${esc(g.code)}</b>
-      · <a href="/g/${g.code}/live">enter ▶</a></div></div>`;
+    // The new group shows EXACTLY ONCE — in Your Groups (with its code + Copy/Share). The old
+    // "✔ created / share this code" card in #justCreated was a SECOND card for the same group
+    // stacked right above the list; that was the "duplicate". No optimistic insert exists.
     document.getElementById("createRow").innerHTML = `<button class="btn ghost sm" onclick="toggleCreate()">+ Create a group</button>`;
-    renderGroupRows();
-  } catch (e) { out.textContent = e; }
+    await renderGroupRows();
+    toast(`Created ${g.name} — code ${g.code}`);
+  } catch (e) { out.textContent = e; if (btn) { btn.disabled = false; btn.textContent = "Create"; } }
 }
 async function joinGroup() {
   const code = document.getElementById("joinCode2").value.trim().toUpperCase(); const out = document.getElementById("joinOut2"); out.textContent = "";
@@ -697,7 +761,6 @@ const TAB_SKELETONS = {
     <div class="sec-title">Add someone</div><div id="addSomeone"></div>
     <div id="friendReqs"></div>
     <div class="sec-title">Friends</div><div id="friendsList"></div>
-    <div id="justCreated"></div>
     <div class="sec-title">Your groups</div><div id="groupRows"></div>
     <div class="card">
       <div id="createRow"><button class="btn ghost sm" onclick="toggleCreate()">+ Create a group</button></div>
@@ -813,9 +876,32 @@ function failOpen() {
     _errorCard(document.getElementById("tabContent"));
   }
 }
+// /?join=CODE deep link. Persist the code IMMEDIATELY (before any sign-in redirect that would
+// drop the query), then complete it once a signed-in player exists — so signing in on the way
+// through never loses the code.
+function storePendingJoin() {
+  const code = new URLSearchParams(location.search).get("join");
+  if (code) { try { localStorage.setItem("rally_pending_join", code); } catch (e) { } }
+}
+async function completePendingJoin() {
+  let code; try { code = localStorage.getItem("rally_pending_join"); } catch (e) { }
+  if (!code) return;
+  try { localStorage.removeItem("rally_pending_join"); } catch (e) { }
+  try {
+    const g = await api("/api/group/join", { code });    // public -> joined; private -> requested
+    if (g.joined) {
+      LS.add(g); window.FILTER = g.code; window.GROUP = { code: g.code, name: g.name, is_public: true };
+      setHeaderName(); history.replaceState({}, "", "/g/" + g.code + "/live"); renderTab("live");
+      toast("Joined " + g.name);
+    } else {
+      toast("Requested to join " + g.name + " — waiting for the admin to admit you.");
+    }
+  } catch (e) { toast(String(e)); }        // unknown code -> "no group with that code" (never silent)
+}
 async function boot() {
+  storePendingJoin();
   await staleTokenGuard();
-  if (!(await authGate())) return;         // signed out -> sign-in screen
+  if (!(await authGate())) return;         // signed out -> sign-in screen (join code kept for after)
   let initTab = (window.INIT && TAB_URL[window.INIT.tab]) ? window.INIT.tab : "live";
   if (new URLSearchParams(location.search).get("add")) initTab = "groups";   // /?add=CODE -> Add someone
   // Render what we have NOW: paint the tab immediately (its data fetch fires right away) and resolve
@@ -826,6 +912,7 @@ async function boot() {
   if (window.INIT && window.INIT.player) openPlayerNoPush(window.INIT.player);
   await idP;                               // a new user needs a name -> chooseName shows (tab already up)
   if (ME.player_id && CURRENT_TAB === "leaderboard") renderTab("leaderboard");  // fill the "you" card once known
+  if (ME.player_id) await completePendingJoin();   // /?join=CODE, now that we have a signed-in player
 }
 let _booted = false;
 function startBoot() {

@@ -32,6 +32,25 @@ def test_global_vs_group_leaderboard_filter(app_client):
     assert "Ann" in gnames and "Bob" in gnames                  # both are members of G
 
 
+def test_leaderboard_carries_code_and_relationship(app_client):
+    c = app_client
+    a, ha, b, hb = _two(c)
+
+    def rel_of(headers, name):
+        lb = c.get("/api/leaderboard?mode=singles", headers=headers).json()
+        row = [r for r in lb["ranked"] + lb["provisional"] if r["name"] == name][0]
+        assert row["code"]                       # Name#CODE needs the code
+        return row["rel"]
+
+    assert rel_of(ha, "Ann") == "you"            # own row
+    assert rel_of(ha, "Bob") == "none"           # stranger -> "not a friend"
+    c.post("/api/friend/request", json={"id": b}, headers=ha)   # a -> b
+    assert rel_of(ha, "Bob") == "sent"           # I sent it
+    assert rel_of(hb, "Ann") == "incoming"       # b sees an incoming request
+    c.post("/api/friend/accept", json={"id": a}, headers=hb)
+    assert rel_of(ha, "Bob") == "friend" and rel_of(hb, "Ann") == "friend"
+
+
 def test_live_feed_shows_my_live_match_no_group(app_client):
     c = app_client
     a, ha, b, hb = _two(c)

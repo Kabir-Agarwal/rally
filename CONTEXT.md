@@ -163,8 +163,32 @@ applied or committed.
   logger_player_id, player_links) on LIVE production data. Kabir must decide the merge before any
   SQL is finalized. Recorded in the deliverable's CONTRADICTIONS.
 
-## CLEAN FOUNDATION — PHASE 2 IN PROGRESS (backend done+verified; client wiring remains) (latest)
-Resume map for the next session. NOT deployed (client not wired; suite not green).
+## CLEAN FOUNDATION — PHASE 2: Tasks A+B DONE & browser-verified; TESTS+DEPLOY remain (latest)
+Resume map. NOT deployed — the gate forbids deploy until the full suite is green (the ~83 old tests
+are still red on the dead model). **Browser boot+score WORKS** (below).
+- **VERIFIED IN-BROWSER (real uvicorn + fetch, mock mode):** `/` serves the SPA; a signed-in user
+  lands on **Live with no group** (header "All groups", no gate). Friends-only court picker shows
+  both players; a NULL-group singles match was started, scored, finished, approved by the other
+  participant -> **status 'counted', group_id NULL**; History shows it (6-0, "Live-scored") and
+  Ranks shows the applied ratings (+28 / -28). Task A (app.py routes) + Task B (static/app.js,
+  static/log.js, templates/shell.html) COMPLETE and committed.
+- **REMAINING — Task C (tests, BLOCKS DEPLOY):** the ~83 old tests (test_tennis/app/admin/auth/
+  names/onboarding/one_live/signin/cache/consistency/db_backend/perf/ratings_dominance/ui_support)
+  assume the dead integer/per-group model and are RED. Port them to the global-uuid model. Patterns
+  proven to work (mirror the smoke test): create a player with `db.create_player(uuid, game_name)`;
+  a match is scored via TestClient with bearer `auth.mint_mock_token(sub, email)` then
+  POST /api/match/start {kind,side1,side2,group:null} -> point... -> finish -> other participant
+  /approve -> status 'counted'. Use `db.SCHEMA` in-memory. Keep test_playerid green (8 pass).
+  Cover: score-no-group, global vs ?group= rating filter, first-sign-in creates player+code,
+  friends accepted-only picker (GET /api/meta with no group = self+accepted friends), group admin
+  guards (403 for non-admin on /api/group/<gid>/*), count-only-when-all-approve, unapprove rolls
+  back, freeze/resume need all participants.
+- **REMAINING — Task D:** once the suite is green, run deploy.py (VERCEL_TOKEN in env), verify live
+  boots (not 500) + report deploy id/readyState/hash.
+- **Known cosmetic:** Ranks/History scope line still shows "· This group" (leftover RANK.scope/
+  HIST.scope labels); data is global/correct. Fix the label to reflect window.FILTER.
+- Old phase-1 resume map below is superseded by the above.
+- Backend earlier resume detail (superseded):
 - **DONE + verified this phase (committed):**
   - `app.py` FULLY rewritten to the global model (Task A). All routes are global `/api/*` with an
     optional `?group=<code>` filter. Verified via a TestClient smoke: first sign-in -> needs_name ->

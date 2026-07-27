@@ -372,18 +372,24 @@ async function initGroups() {
 }
 // YOUR GROUPS: one card per group (from /api/groups) — 🎾 name, "code XXXX · private/public",
 // tap to filter to that group, admin-only Make public/private.
+// ATOMIC: fetch first, build off-screen, then swap in ONE operation. Never blank #groupRows before
+// the data arrives — that empty gap was why deleting one group appeared to wipe the whole list.
 async function renderGroupRows() {
-  const host = document.getElementById("groupRows"); host.innerHTML = "";
-  let gs = [];
-  try { gs = (await api("/api/groups")).groups || []; } catch (e) { }
-  // If the active filter points at a group we're no longer in (left/deleted), fall back to All.
+  const host = document.getElementById("groupRows"); if (!host) return;
+  let gs;
+  try { gs = (await api("/api/groups")).groups || []; } catch (e) { gs = null; }
+  if (!host.isConnected) return;
+  if (gs === null) {                              // fetch failed: keep existing cards, offer a retry
+    if (!host.children.length) host.innerHTML = `<div class="card"><div class="empty">Couldn't load your groups — <a href="#" onclick="renderGroupRows();return false">retry</a></div></div>`;
+    return;
+  }
   if (window.FILTER && !gs.some(g => g.code === window.FILTER)) { window.FILTER = null; window.GROUP = null; setHeaderName(); }
-  if (!gs.length) { host.innerHTML = '<div class="card"><div class="empty">No groups yet.</div></div>'; return; }
+  const frag = document.createDocumentFragment();
+  if (!gs.length) frag.appendChild(el('<div class="card"><div class="empty">No groups yet.</div></div>'));
   gs.forEach(g => {
     const cur = g.code === window.FILTER;
     const adminBtn = g.is_admin
       ? `<button class="btn sm ${g.is_public ? 'clay' : 'ghost'}" style="flex:0 0 auto" onclick="event.stopPropagation();flipPublic('${g.id}',${g.is_public ? 'true' : 'false'},this)">${g.is_public ? 'Make private' : 'Make public'}</button>` : '';
-    // admin -> Delete (keeps matches); non-admin member -> Leave.
     const exitBtn = g.is_admin
       ? `<button class="btn sm danger" style="flex:0 0 auto" onclick="event.stopPropagation();deleteGroup('${g.id}')">Delete</button>`
       : `<button class="btn sm ghost" style="flex:0 0 auto" onclick="event.stopPropagation();leaveGroup('${g.id}')">Leave</button>`;
@@ -398,13 +404,19 @@ async function renderGroupRows() {
       <div class="note" id="gm_${g.id}"></div></div>`);
     card.style.cursor = "pointer";
     card.onclick = () => location.href = "/g/" + g.code + "/live";
-    host.appendChild(card);
+    frag.appendChild(card);
   });
+  host.replaceChildren(frag);                      // one-shot swap — no wipe, no empty flash
+}
+function _removeGroupCard(gid) {                    // instant feedback: drop just this card, keep the rest
+  const box = document.getElementById("ga_" + gid);
+  const card = box && box.closest(".card");
+  if (card) card.remove();
 }
 // Leave a group (non-admin). The admin cannot silently orphan the group — the server rejects it
 // and we surface the plain reason (hand admin over or delete).
 async function leaveGroup(gid) {
-  try { await api(`/api/group/${gid}/leave`, {}); renderGroupRows(); }
+  try { await api(`/api/group/${gid}/leave`, {}); _removeGroupCard(gid); renderGroupRows(); }
   catch (e) { const m = document.getElementById("gm_" + gid); if (m) m.textContent = e; }
 }
 // Delete a group — inline confirm that states matches are KEPT (no browser popups; no redesign).
@@ -415,7 +427,7 @@ function deleteGroup(gid) {
     <button class="btn sm danger" style="flex:0 0 auto" onclick="event.stopPropagation();confirmDeleteGroup('${gid}')">Delete</button>`;
 }
 async function confirmDeleteGroup(gid) {
-  try { await api(`/api/group/${gid}/delete`, {}); renderGroupRows(); }   // renderGroupRows resets a stale filter
+  try { await api(`/api/group/${gid}/delete`, {}); _removeGroupCard(gid); renderGroupRows(); }  // drop card now, reconcile atomically
   catch (e) { const m = document.getElementById("gm_" + gid); if (m) m.textContent = e; }
 }
 async function flipPublic(gid, cur, btn) {
@@ -714,11 +726,15 @@ function failOpen() {
 async function boot() {
   await staleTokenGuard();
   if (!(await authGate())) return;         // signed out -> sign-in screen
-  await raceTimeout(ensureIdentity(), 4000, true);   // resolves/creates the global player
   const initTab = (window.INIT && TAB_URL[window.INIT.tab]) ? window.INIT.tab : "live";
+  // Render what we have NOW: paint the tab immediately (its data fetch fires right away) and resolve
+  // identity IN PARALLEL, instead of blocking first paint on a second sequential token-verify.
+  const idP = raceTimeout(ensureIdentity(), 10000, true);
   renderTab(initTab);
   setActiveNav(initTab);
   if (window.INIT && window.INIT.player) openPlayerNoPush(window.INIT.player);
+  await idP;                               // a new user needs a name -> chooseName shows (tab already up)
+  if (ME.player_id && CURRENT_TAB === "leaderboard") renderTab("leaderboard");  // fill the "you" card once known
 }
 let _booted = false;
 function startBoot() {

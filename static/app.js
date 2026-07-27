@@ -432,12 +432,20 @@ function setHistOpt(kind, val, btn) { btn.parentElement.querySelectorAll("button
 async function loadHistory() {
   const sl = document.getElementById("histScopeLine");
   if (sl) sl.textContent = "· " + HIST_KIND_LABELS[HIST.kind] + " · " + scopeLabel(HIST.scope);
-  const d = await api(G("/history"));
-  const host = document.getElementById("historyList"); host.innerHTML = "";
-  let matches = d.matches;
-  if (HIST.kind !== "all") matches = matches.filter(m => m.kind === HIST.kind);
-  if (!matches.length) { host.innerHTML = `<div class="empty">No finished matches.</div>`; return; }
-  matches.forEach(m => host.appendChild(historyCard(m)));
+  const host = document.getElementById("historyList");
+  // Never sit on "Loading…": bound the fetch and always land on data OR an error state.
+  const d = await raceTimeout(api(G("/history")), 6000, null);
+  if (!host) return;
+  if (!d) { host.innerHTML = `<div class="empty">Couldn't load history — <a href="#" onclick="loadHistory();return false">retry</a></div>`; return; }
+  host.innerHTML = "";
+  try {
+    let matches = d.matches || [];
+    if (HIST.kind !== "all") matches = matches.filter(m => m.kind === HIST.kind);
+    if (!matches.length) { host.innerHTML = `<div class="empty">No finished matches.</div>`; return; }
+    matches.forEach(m => host.appendChild(historyCard(m)));
+  } catch (e) {
+    host.innerHTML = `<div class="empty">Couldn't render history — <a href="#" onclick="loadHistory();return false">retry</a></div>`;
+  }
 }
 function teamBlocks(arr) { return arr.map(pLink).join('<span class="amp">&</span>'); }
 function matchTitle(m) {

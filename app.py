@@ -499,8 +499,12 @@ def api_history(request: Request):
         rows = con.execute(f"SELECT * FROM matches WHERE group_id=? AND status IN {shown} "
                            "ORDER BY COALESCE(finished_at, created_at) DESC, id DESC", (gid,)).fetchall()
     elif p:
+        # No DISTINCT: match_players PK is (match_id, player_id), so a player appears at most once
+        # per match — the JOIN yields one row per match already. DISTINCT + an ORDER BY expression
+        # not in the select list is a Postgres error (SELECT DISTINCT ... ORDER BY COALESCE(...)),
+        # which 500'd the signed-in History path (SQLite allowed it). This was the History hang.
         rows = con.execute(
-            f"SELECT DISTINCT m.* FROM matches m JOIN match_players mp ON mp.match_id=m.id "
+            f"SELECT m.* FROM matches m JOIN match_players mp ON mp.match_id=m.id "
             f"WHERE mp.player_id=? AND m.status IN {shown} "
             "ORDER BY COALESCE(m.finished_at, m.created_at) DESC, m.id DESC", (p["id"],)).fetchall()
     else:

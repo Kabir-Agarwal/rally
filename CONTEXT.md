@@ -163,7 +163,33 @@ applied or committed.
   logger_player_id, player_links) on LIVE production data. Kabir must decide the merge before any
   SQL is finalized. Recorded in the deliverable's CONTRADICTIONS.
 
-## First-signed-in bug fixes (2026-07-27) — deployed (latest)
+## Group actions + court picker (2026-07-27) — deployed (latest)
+Deployed dpl_4pk6HnfYsZx91ATv6CZ8inBpsBVK (READY), hash cfc9044b77. 96 Python + Node green.
+- **Task 3 (court picker dead tap) — ROOT CAUSE:** the roster chip's onclick was
+  `rosterTap(${p.id})` with player ids now being UUID STRINGS → the attribute became malformed JS
+  (`rosterTap(0d00-…)`) and threw on tap → the chip never placed. Same class as the openPlayer bug.
+  Fixed by quoting: `rosterTap('${p.id}')` (also `ttAward('${id}')`, `ttPickSet(...,'${id}',...)`).
+  The min-players rule was NOT the blocker — but it was silent, so `updateStartBtn` now STATES why
+  the Start button is disabled ("add a friend to play singles/doubles/triple threat" when there
+  aren't enough placeable people, or "place N players to start"). Never a dead tap.
+- **Task 4:** /api/meta with no group = the player + accepted friends only; the signed-in player is
+  ALWAYS included (verified: zero friends -> exactly one placeable chip, you).
+- **Task 1 (leave):** new POST /api/group/<gid>/leave. A non-admin member leaves (removed from
+  group_members, matches untouched). The ADMIN cannot leave (would orphan the group) -> 400 with a
+  plain reason (hand over admin or delete); the client surfaces it. Server-enforced, not just UI.
+- **Task 2 (delete in UI):** the Groups-tab card now shows Delete (admin only) behind an inline
+  confirm stating matches are KEPT. Server /api/group/<gid>/delete is admin-only (403 direct for a
+  non-admin, verified). Deleting keeps matches (group_id -> NULL + former_group_name).
+- **Resilience (applied the recommended treatment):** loadRanks, the Live poller, and log.js
+  loadEditor now use raceTimeout + an error/retry state — no tab can sit on "Loading…" (the class of
+  fault behind the History hang). Removed the wrong "· This group" scope label on Ranks/History
+  (now shows the real filter: a group name or "All groups").
+- **UNVERIFIED BY ME:** the signed-in interactions (placing a chip, leave, delete) — no Google
+  session in this env; confirmed by local mock runs + the suite. The /leave route existing and the
+  picker/Start code shipping ARE verified live (anonymous). Needs the owner's device for the signed-in
+  end-to-end.
+
+## First-signed-in bug fixes (2026-07-27) — deployed (earlier)
 Three faults from the owner's first live signed-in test, all SQLite-passed / Postgres-broke
 divergences or a CSS selector miss. Deployed dpl_HGJtZ5ufoH83jYV8uqWqgXv35nr8 (READY), hash 7c97dc8db0.
 - **BUG 1 — group create 500:** `db.create_group` inserted int `1` into the live BOOLEAN

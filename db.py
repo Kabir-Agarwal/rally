@@ -326,8 +326,10 @@ def rename_player(con, pid, game_name=None, real_name=None):
 # --- groups ---------------------------------------------------------------
 def create_group(con, name, admin_id):
     gid, code = gen_uuid(), new_group_code(con)
+    # is_public must be a real bool: the live column is BOOLEAN (psycopg rejects int 1 -> 500).
+    # SQLite stores the bool as 0/1 all the same. This was the group-create 500 (2026-07-27).
     con.execute("INSERT INTO groups(id, name, code, is_public, admin_id, created_at) VALUES(?,?,?,?,?,?)",
-                (gid, name.strip(), code, 1, admin_id, now()))
+                (gid, name.strip(), code, True, admin_id, now()))
     con.execute("INSERT INTO group_members(group_id, player_id, joined_at) VALUES(?,?,?)",
                 (gid, admin_id, now()))
     con.commit()
@@ -399,7 +401,7 @@ def clear_join_request(con, gid, pid):
 
 
 def set_public(con, gid, is_public):
-    con.execute("UPDATE groups SET is_public=? WHERE id=?", (1 if is_public else 0, gid))
+    con.execute("UPDATE groups SET is_public=? WHERE id=?", (bool(is_public), gid))   # BOOLEAN on live PG
     con.commit()
 
 

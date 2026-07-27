@@ -1,76 +1,67 @@
-"""App-level tests: public vs private API access, live feed, end-to-end flow."""
-import importlib
-import db as dbmod
+"""App-level tests: global vs ?group= leaderboard, live feed, end-to-end scoring flow (new model)."""
+from conftest import signin
 
 
-def client(tmp_path):
-    # point the DB at a temp file, then (re)import app fresh
-    dbmod.DB_PATH = tmp_path / "t.db"
-    import app as appmod
-    importlib.reload(appmod)
-    appmod.db.DB_PATH = tmp_path / "t.db"
-    appmod.db.init_db(tmp_path / "t.db")
-    # patch get_con to use the temp path
-    orig = appmod.db.connect
-    appmod.db.connect = lambda path=tmp_path / "t.db": orig(path)
-    from fastapi.testclient import TestClient
-    c = TestClient(appmod.app)
-    c.headers.update({"Authorization": "Bearer " + appmod.auth.mint_mock_token("u1", "u1@test"),
-                      "X-Admin-Key": appmod.ADMIN_KEY})
-    return c
+def _two(c):
+    a, ha = signin(c, "a", "Ann")
+    b, hb = signin(c, "b", "Bob")
+    return a, ha, b, hb
 
 
-def test_public_vs_private_global_leaderboard(tmp_path):
-    c = client(tmp_path)
-    priv = c.post("/api/group/create", json={"name": "Priv"}).json()["code"]
-    pub = c.post("/api/group/create", json={"name": "Pub"}).json()["code"]
-    # add a player to each
-    c.post(f"/g/{priv}/api/player", json={"name": "Secret"})
-    c.post(f"/g/{pub}/api/player", json={"name": "Shown"})
-    # make pub public
-    c.post(f"/g/{pub}/api/public", json={"is_public": True})
-    gl = c.get("/api/global/leaderboard?mode=singles").json()
-    names = [r["name"] for r in gl["ranked"] + gl["provisional"]]
-    assert "Shown" in names and "Secret" not in names
+def _score_counted(c, a, ha, b, hb, group=None):
+    mid = c.post("/api/match/start", json={"kind": "singles", "side1": [a], "side2": [b], "group": group},
+                 headers=ha).json()["id"]
+    c.post(f"/api/match/{mid}/sets", json={"sets": [[6, 4], [6, 3]]}, headers=ha)
+    c.post(f"/api/match/{mid}/finish", json={}, headers=ha)          # logger a auto-approves
+    c.post(f"/api/match/{mid}/approve", json={}, headers=hb)         # b approves -> counted
+    return mid
 
 
-def test_live_feed_shows_public_groups_only(tmp_path):
-    c = client(tmp_path)
-    home = c.post("/api/group/create", json={"name": "Home"}).json()["code"]
-    other = c.post("/api/group/create", json={"name": "Other"}).json()["code"]
-    p1 = c.post(f"/g/{other}/api/player", json={"name": "X"}).json()["id"]
-    p2 = c.post(f"/g/{other}/api/player", json={"name": "Y"}).json()["id"]
-    c.post(f"/g/{other}/api/match/start", json={"kind": "singles", "side1": [p1], "side2": [p2], "logger": p1})
-    # other is private -> not in home's public feed
-    feed = c.get(f"/g/{home}/api/live").json()
-    assert feed["public"] == []
-    c.post(f"/g/{other}/api/public", json={"is_public": True})
-    feed = c.get(f"/g/{home}/api/live").json()
-    assert len(feed["public"]) == 1 and feed["public"][0]["group"] == "Other"
+def test_global_vs_group_leaderboard_filter(app_client):
+    c = app_client
+    a, ha, b, hb = _two(c)
+    code = c.post("/api/group/create", json={"name": "G"}, headers=ha).json()["code"]
+    c.post("/api/group/join", json={"code": code}, headers=hb)   # public group -> instant member
+    _score_counted(c, a, ha, b, hb, group=code)
+    glob = c.get("/api/leaderboard?mode=singles").json()
+    grp = c.get(f"/api/leaderboard?mode=singles&group={code}").json()
+    names_glob = [r["name"] for r in glob["ranked"] + glob["provisional"]]
+    assert "Ann" in names_glob and "Bob" in names_glob          # global sees everyone
+    assert grp["scope"] == "group"                              # ?group= filters to that group
+    gnames = [r["name"] for r in grp["ranked"] + grp["provisional"]]
+    assert "Ann" in gnames and "Bob" in gnames                  # both are members of G
 
 
-def test_end_to_end_singles_flow(tmp_path):
-    c = client(tmp_path)
-    code = c.post("/api/group/create", json={"name": "E2E"}).json()["code"]
-    a = c.post(f"/g/{code}/api/player", json={"name": "Ann"}).json()["id"]
-    b = c.post(f"/g/{code}/api/player", json={"name": "Bob"}).json()["id"]
-    mid = c.post(f"/g/{code}/api/match/start",
-                 json={"kind": "singles", "side1": [a], "side2": [b], "logger": a}).json()["id"]
-    c.post(f"/g/{code}/api/match/{mid}/sets", json={"sets": [[6, 4], [6, 3]]})
-    r = c.post(f"/g/{code}/api/match/{mid}/finish", json={}).json()
-    assert r["status"] == "finished"                       # v2: immediate, no approval
-    lb = c.get(f"/g/{code}/api/leaderboard?scope=group&mode=singles").json()
-    winner = [x for x in lb["provisional"] if x["name"] == "Ann"][0]
-    assert winner["rating"] > 1200
+def test_live_feed_shows_my_live_match_no_group(app_client):
+    c = app_client
+    a, ha, b, hb = _two(c)
+    mid = c.post("/api/match/start", json={"kind": "singles", "side1": [a], "side2": [b], "group": None},
+                 headers=ha).json()["id"]
+    feed = c.get("/api/live", headers=ha).json()
+    assert len(feed["matches"]) == 1 and feed["matches"][0]["group_id"] is None
 
 
-def test_per_point_updates_sets(tmp_path):
-    c = client(tmp_path)
-    code = c.post("/api/group/create", json={"name": "PP"}).json()["code"]
-    a = c.post(f"/g/{code}/api/player", json={"name": "A"}).json()["id"]
-    b = c.post(f"/g/{code}/api/player", json={"name": "B"}).json()["id"]
-    mid = c.post(f"/g/{code}/api/match/start",
-                 json={"kind": "singles", "side1": [a], "side2": [b], "logger": a}).json()["id"]
+def test_end_to_end_singles_counts_only_after_all_approve(app_client):
+    c = app_client
+    a, ha, b, hb = _two(c)
+    mid = c.post("/api/match/start", json={"kind": "singles", "side1": [a], "side2": [b], "group": None},
+                 headers=ha).json()["id"]
+    c.post(f"/api/match/{mid}/sets", json={"sets": [[6, 4], [6, 3]]}, headers=ha)
+    r = c.post(f"/api/match/{mid}/finish", json={}, headers=ha).json()
+    assert r["status"] == "pending_approval"               # logger approved, b hasn't
+    lb = c.get("/api/leaderboard?mode=singles").json()
+    assert all(x["name"] != "Ann" or x["rating"] == 1200 for x in lb["provisional"])  # not counted yet
+    assert c.post(f"/api/match/{mid}/approve", json={}, headers=hb).json()["status"] == "counted"
+    lb = c.get("/api/leaderboard?mode=singles").json()
+    ann = [x for x in lb["provisional"] if x["name"] == "Ann"][0]
+    assert ann["rating"] > 1200
+
+
+def test_per_point_updates_sets(app_client):
+    c = app_client
+    a, ha, b, hb = _two(c)
+    mid = c.post("/api/match/start", json={"kind": "singles", "side1": [a], "side2": [b], "group": None},
+                 headers=ha).json()["id"]
     for _ in range(4):
-        v = c.post(f"/g/{code}/api/match/{mid}/point", json={"winner_side": 1}).json()
-    assert v["per_point"] and v["sets"][0]["g1"] == 1  # 4 points -> 1 game to side1
+        v = c.post(f"/api/match/{mid}/point", json={"winner_side": 1}, headers=ha).json()
+    assert v["per_point"] and v["sets"][0]["g1"] == 1

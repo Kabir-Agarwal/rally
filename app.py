@@ -961,6 +961,24 @@ async def api_group_delete(gid: str, request: Request):
     return {"ok": True}
 
 
+@app.post("/api/group/{gid}/leave")
+async def api_group_leave(gid: str, request: Request):
+    """A member leaves the group. The ADMIN cannot simply leave (it would orphan the group) —
+    they must hand admin over or delete it; the client shows which. Matches are untouched."""
+    con = get_con()
+    u, p = require_player(con, request)
+    g = db.group_by_id(con, gid)
+    if not g:
+        con.close()
+        raise HTTPException(404, "group not found")
+    if g["admin_id"] == p["id"]:
+        con.close()
+        return JSONResponse({"error": "You're the admin — hand admin over or delete the group to leave."}, 400)
+    db.remove_member(con, gid, p["id"])
+    con.close()
+    return {"ok": True}
+
+
 @app.get("/api/group/{gid}/requests")
 def api_group_requests(gid: str, request: Request):
     con = get_con()

@@ -212,8 +212,10 @@ function broadcastCard(m) {
 // ================= LIVE =================
 function initLive() {
   poll(async () => {
-    const d = await api(G("/live"));
-    const host = document.getElementById("liveMatches"); host.innerHTML = "";
+    const d = await raceTimeout(api(G("/live")), 6000, null);   // never leave "Loading…" on a stall/error
+    const host = document.getElementById("liveMatches"); if (!host) return;
+    if (!d) { host.innerHTML = `<div class="empty">Couldn't load live matches — will retry.</div>`; return; }
+    host.innerHTML = "";
     if (!d.matches.length) host.appendChild(el(`<div class="empty">No live matches. Start one in Log.</div>`));
     d.matches.forEach(m => host.appendChild(broadcastCard(m)));
     const pub = document.getElementById("publicWrap");
@@ -234,7 +236,13 @@ function setRankOpt(kind, val, btn) {
   RANK[kind] = val; loadRanks();
 }
 async function loadRanks() {
-  RANK.data = await api(G("/leaderboard?mode=" + RANK.mode));
+  const d = await raceTimeout(api(G("/leaderboard?mode=" + RANK.mode)), 6000, null);
+  if (!d) {                                     // never sit on "Loading…": show an error + retry
+    const host = document.getElementById("rankList");
+    if (host) host.innerHTML = `<div class="empty">Couldn't load ranks — <a href="#" onclick="loadRanks();return false">retry</a></div>`;
+    return;
+  }
+  RANK.data = d;
   renderRanks();
 }
 function rankRow(r, mePid) {
@@ -253,7 +261,7 @@ const dispFromEloRow = (r) => { const v = r.rating - 1200; return (v > 0 ? "+" :
 function renderRanks() {
   if (!RANK.data) return;
   const sl = document.getElementById("rankScopeLine");
-  if (sl) sl.textContent = (RANK.mode === "doubles" ? "Doubles" : "Singles") + " · " + scopeLabel(RANK.scope);
+  if (sl) sl.textContent = (RANK.mode === "doubles" ? "Doubles" : "Singles") + " · " + filterLabel();
   const q = (document.getElementById("rankSearch").value || "").toLowerCase();
   const filt = a => a.filter(r => r.name.toLowerCase().includes(q));
   const ranked = filt(RANK.data.ranked), prov = filt(RANK.data.provisional);
@@ -279,6 +287,8 @@ function initRanks() { loadRanks(); poll(async () => { await loadRanks(); }, 500
 const HIST_KIND_LABELS = { all: "All", singles: "Singles", doubles: "Doubles", tt: "Triple threat" };
 const HIST_KIND_FROM = { "All": "all", "Singles": "singles", "Doubles": "doubles", "Triple threat": "tt" };
 function scopeLabel(s) { return s === "everyone" ? "Everyone" : "This group"; }
+// The active view is a group FILTER (or "All groups"); the old "This group" label was wrong now.
+function filterLabel() { return window.FILTER && window.GROUP ? window.GROUP.name : "All groups"; }
 function openFunnel(which) {
   const isR = which === "ranks";
   const modes = isR ? ["Singles", "Doubles"] : ["All", "Singles", "Doubles", "Triple threat"];
@@ -366,21 +376,47 @@ async function renderGroupRows() {
   const host = document.getElementById("groupRows"); host.innerHTML = "";
   let gs = [];
   try { gs = (await api("/api/groups")).groups || []; } catch (e) { }
+  // If the active filter points at a group we're no longer in (left/deleted), fall back to All.
+  if (window.FILTER && !gs.some(g => g.code === window.FILTER)) { window.FILTER = null; window.GROUP = null; setHeaderName(); }
   if (!gs.length) { host.innerHTML = '<div class="card"><div class="empty">No groups yet.</div></div>'; return; }
   gs.forEach(g => {
     const cur = g.code === window.FILTER;
+    const adminBtn = g.is_admin
+      ? `<button class="btn sm ${g.is_public ? 'clay' : 'ghost'}" style="flex:0 0 auto" onclick="event.stopPropagation();flipPublic('${g.id}',${g.is_public ? 'true' : 'false'},this)">${g.is_public ? 'Make private' : 'Make public'}</button>` : '';
+    // admin -> Delete (keeps matches); non-admin member -> Leave.
+    const exitBtn = g.is_admin
+      ? `<button class="btn sm danger" style="flex:0 0 auto" onclick="event.stopPropagation();deleteGroup('${g.id}')">Delete</button>`
+      : `<button class="btn sm ghost" style="flex:0 0 auto" onclick="event.stopPropagation();leaveGroup('${g.id}')">Leave</button>`;
     const card = el(`<div class="card">
       <div class="row">
         <div style="flex:1">
           <div style="font-weight:800;font-size:14px">🎾 ${esc(g.name)}${cur ? ' <span class="curmark">· current</span>' : ''}</div>
           <div class="muted" style="margin-top:2px">code ${esc(g.code)} · ${g.is_public ? 'public' : 'private'}</div>
         </div>
-        ${g.is_admin ? `<button class="btn sm ${g.is_public ? 'clay' : 'ghost'}" style="flex:0 0 auto" onclick="event.stopPropagation();flipPublic('${g.id}',${g.is_public ? 'true' : 'false'},this)">${g.is_public ? 'Make private' : 'Make public'}</button>` : ''}
-      </div></div>`);
+      </div>
+      <div class="row" style="margin-top:8px;gap:8px;justify-content:flex-end" id="ga_${g.id}">${adminBtn}${exitBtn}</div>
+      <div class="note" id="gm_${g.id}"></div></div>`);
     card.style.cursor = "pointer";
     card.onclick = () => location.href = "/g/" + g.code + "/live";
     host.appendChild(card);
   });
+}
+// Leave a group (non-admin). The admin cannot silently orphan the group — the server rejects it
+// and we surface the plain reason (hand admin over or delete).
+async function leaveGroup(gid) {
+  try { await api(`/api/group/${gid}/leave`, {}); renderGroupRows(); }
+  catch (e) { const m = document.getElementById("gm_" + gid); if (m) m.textContent = e; }
+}
+// Delete a group — inline confirm that states matches are KEPT (no browser popups; no redesign).
+function deleteGroup(gid) {
+  const box = document.getElementById("ga_" + gid); if (!box) return;
+  box.innerHTML = `<span class="muted" style="flex:1;text-align:left">Delete this group? Its matches are KEPT — only the group is removed.</span>
+    <button class="btn sm ghost" style="flex:0 0 auto" onclick="event.stopPropagation();renderGroupRows()">Cancel</button>
+    <button class="btn sm danger" style="flex:0 0 auto" onclick="event.stopPropagation();confirmDeleteGroup('${gid}')">Delete</button>`;
+}
+async function confirmDeleteGroup(gid) {
+  try { await api(`/api/group/${gid}/delete`, {}); renderGroupRows(); }   // renderGroupRows resets a stale filter
+  catch (e) { const m = document.getElementById("gm_" + gid); if (m) m.textContent = e; }
 }
 async function flipPublic(gid, cur, btn) {
   const next = !cur;
@@ -431,7 +467,7 @@ let HIST = { kind: "all", scope: "group" };
 function setHistOpt(kind, val, btn) { btn.parentElement.querySelectorAll("button").forEach(b => b.classList.remove("on")); btn.classList.add("on"); HIST[kind] = val; loadHistory(); }
 async function loadHistory() {
   const sl = document.getElementById("histScopeLine");
-  if (sl) sl.textContent = "· " + HIST_KIND_LABELS[HIST.kind] + " · " + scopeLabel(HIST.scope);
+  if (sl) sl.textContent = "· " + HIST_KIND_LABELS[HIST.kind] + " · " + filterLabel();
   const host = document.getElementById("historyList");
   // Never sit on "Loading…": bound the fetch and always land on data OR an error state.
   const d = await raceTimeout(api(G("/history")), 6000, null);

@@ -58,6 +58,27 @@ def test_remove_member(app_client):
     assert gid not in [g["id"] for g in c.get("/api/groups", headers=hb).json()["groups"]]
 
 
+def test_member_can_leave_admin_cannot(app_client):
+    c = app_client
+    gid, code, a, ha, b, hb = _group(c)   # a = admin, b = member
+    # a non-admin member leaves -> removed from the group
+    assert c.post(f"/api/group/{gid}/leave", json={}, headers=hb).status_code == 200
+    assert gid not in [g["id"] for g in c.get("/api/groups", headers=hb).json()["groups"]]
+    # the admin cannot simply leave (would orphan the group) -> 400 with a plain reason
+    r = c.post(f"/api/group/{gid}/leave", json={}, headers=ha)
+    assert r.status_code == 400 and "admin" in r.json()["error"].lower()
+    assert gid in [g["id"] for g in c.get("/api/groups", headers=ha).json()["groups"]]   # still in it
+
+
+def test_leave_keeps_the_groups_matches(app_client):
+    c = app_client
+    gid, code, a, ha, b, hb = _group(c)
+    mid = c.post("/api/match/start", json={"kind": "singles", "side1": [a], "side2": [b], "group": code},
+                 headers=ha).json()["id"]
+    c.post(f"/api/group/{gid}/leave", json={}, headers=hb)
+    assert c.get(f"/api/match/{mid}").json()["group_id"] == gid   # match untouched by the leave
+
+
 def test_delete_group_keeps_matches(app_client):
     c = app_client
     gid, code, a, ha, b, hb = _group(c)

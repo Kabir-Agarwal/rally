@@ -163,7 +163,31 @@ applied or committed.
   logger_player_id, player_links) on LIVE production data. Kabir must decide the merge before any
   SQL is finalized. Recorded in the deliverable's CONTRADICTIONS.
 
-## CLEAN FOUNDATION — COMPLETE & DEPLOYED (Phase 2 A–D done) (latest)
+## First-signed-in bug fixes (2026-07-27) — deployed (latest)
+Three faults from the owner's first live signed-in test, all SQLite-passed / Postgres-broke
+divergences or a CSS selector miss. Deployed dpl_HGJtZ5ufoH83jYV8uqWqgXv35nr8 (READY), hash 7c97dc8db0.
+- **BUG 1 — group create 500:** `db.create_group` inserted int `1` into the live BOOLEAN
+  `groups.is_public`; psycopg rejects int→boolean → 500. SQLite (INTEGER column) accepted it, so
+  tests missed it. Fixed: insert `True`; `set_public` now writes `bool(is_public)`. Route is
+  POST `/api/group/create` (client + server agree; `/api/groups` is the GET list, hence the 405).
+- **BUG 2 — History hang:** the signed-in branch of `/api/history` used
+  `SELECT DISTINCT m.* ... ORDER BY COALESCE(finished_at, created_at)`. Postgres forbids a DISTINCT
+  query ordered by an expression not in the select list → 500 (SQLite allowed it). Anonymous skips
+  that branch (p is None), so it returned 200 and masked the bug. Fixed: dropped DISTINCT (a player
+  is in match_players once per match). Also hardened `loadHistory` (raceTimeout + retry/error state)
+  so a tab never sits on "Loading…".
+- **BUG 3 — tab bar unstyled:** the SPA shell uses `<button>` for the tabs but style.css targeted
+  `.tabs a`, so the buttons got default (boxy) chrome. Fixed: target `.tabs a,.tabs button` and
+  strip border/background. Verified LIVE (border:none, transparent bg).
+- **Also found (reported, NOT changed — out of the 3-bug scope):** `loadRanks` / `initLive` poll /
+  log.js `loadEditor` have no try/catch (same stuck-placeholder risk if their endpoint ever errors —
+  their endpoints have no DISTINCT/COALESCE hazard today); Ranks/History still show a leftover
+  "· This group" scope label (data is global/correct); no client↔server route mismatches found.
+- **UNVERIFIED BY ME:** BUG 1 & BUG 2 are Postgres-only and need a signed-in session to trigger the
+  original 500s; this env has no Google creds and mock tokens don't verify against live Supabase, so
+  those two live signed-in paths are confirmed only by code + local SQLite — needs the owner's device.
+
+## CLEAN FOUNDATION — COMPLETE & DEPLOYED (Phase 2 A–D done) (earlier)
 The clean-foundation rewrite is live. Suite GREEN (93 Python + boot/engine/sync Node). App boots on
 the migrated Postgres and scores a match with group_id NULL.
 - **Deployed:** dpl_C9rXw3BkR7EA7ijTiyJjpiUYhjY6 (READY), cache-bust `a966babada`. Live verify:

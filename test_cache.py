@@ -1,4 +1,6 @@
-"""Task 2: cached ratings equal freshly-computed, cache invalidates on rating changes."""
+"""Ratings are now recomputed-on-read from counted matches (the in-process rating cache + ratings_rev
+were removed in the clean foundation). These tests assert the NEW behavior: correctness, and the
+global vs ?group= filter. (Rewritten from the old cache tests — the cache no longer exists.)"""
 import sqlite3
 import db
 import logic
@@ -8,55 +10,48 @@ def mem():
     con = sqlite3.connect(":memory:")
     con.row_factory = sqlite3.Row
     con.executescript(db.SCHEMA)
-    db._RATING_CACHE.clear()
     return con
 
 
-def _finished(con, gid, a, b, sets):
-    m = logic.start_match(con, gid, "singles", [a], [b], [], a)
+def mkp(con, name):
+    pid = db.gen_uuid(); db.create_player(con, pid, name); return pid
+
+
+def counted(con, a, b, sets, group_id=None):
+    m = logic.start_match(con, group_id, "singles", [a], [b], [], a)
     logic.edit_sets(con, m, sets)
     logic.finish_match(con, m)
+    for p in (a, b):
+        logic.approve(con, m, p)
     return m
 
 
-def test_cached_equals_freshly_computed():
+def test_only_counted_matches_affect_ratings():
     con = mem()
-    gid, _ = db.create_group(con, "G")
-    a, b, c = (db.add_player(con, gid, n) for n in "ABC")
-    _finished(con, gid, a, b, [(6, 4)])
-    _finished(con, gid, b, c, [(6, 3)])
-    _finished(con, gid, a, c, [(7, 5)])
-    cached = db.rating_state(con, gid)                     # builds + caches
-    fresh = db.rating_state(con, gid, use_cache=False)     # bypasses cache
-    assert cached["singles"] == fresh["singles"]
-    assert cached["doubles"] == fresh["doubles"]
-    assert cached["pairs"] == fresh["pairs"]
+    a, b = mkp(con, "A"), mkp(con, "B")
+    m = logic.start_match(con, None, "singles", [a], [b], [], a)
+    logic.edit_sets(con, m, [(6, 4)]); logic.finish_match(con, m)   # pending_approval (b hasn't approved)
+    assert db.rating_state(con)["singles"].get(a, 1200) == 1200
+    logic.approve(con, m, b)                                        # now counted
+    assert db.rating_state(con)["singles"][a] > 1200
 
 
-def test_cache_hit_returns_same_object_until_change():
+def test_global_vs_group_rating_filter():
     con = mem()
-    gid, _ = db.create_group(con, "G")
-    a, b = db.add_player(con, gid, "A"), db.add_player(con, gid, "B")
-    _finished(con, gid, a, b, [(6, 4)])
-    s1 = db.rating_state(con, gid)
-    s2 = db.rating_state(con, gid)
-    assert s1 is s2, "unchanged rev -> served from cache (no rebuild)"
-    # a new finished match bumps the rev -> cache rebuilds, numbers update
-    before = s1["singles"][a]
-    _finished(con, gid, a, b, [(6, 0)])
-    s3 = db.rating_state(con, gid)
-    assert s3 is not s1 and s3["singles"][a] != before
-    assert s3["singles"] == db.rating_state(con, gid, use_cache=False)["singles"]
+    a, b, c = mkp(con, "A"), mkp(con, "B"), mkp(con, "C")
+    gid, _ = db.create_group(con, "G", a)
+    counted(con, a, b, [(6, 0)], group_id=gid)     # in-group match
+    counted(con, a, c, [(6, 0)], group_id=None)    # ungrouped match
+    glob = db.rating_state(con)                     # all counted matches
+    grp = db.rating_state(con, gid)                 # only group G's matches
+    assert glob["singles_n"][a] == 2                # both count globally
+    assert grp["singles_n"][a] == 1                 # only the in-group one for the group filter
 
 
-def test_void_and_delete_invalidate_cache():
+def test_recompute_is_stable():
     con = mem()
-    gid, _ = db.create_group(con, "G")
-    a, b = db.add_player(con, gid, "A"), db.add_player(con, gid, "B")
-    m = _finished(con, gid, a, b, [(6, 0)])
-    assert db.rating_state(con, gid)["singles"][a] > 1200
-    logic.admin_void_match(con, m)
-    assert db.rating_state(con, gid)["singles"].get(a, 1200) == 1200      # cache saw the void
-    assert db.rating_state(con, gid)["singles"] == db.rating_state(con, gid, use_cache=False)["singles"]
-    logic.admin_unvoid_match(con, m)
-    assert db.rating_state(con, gid)["singles"][a] > 1200
+    a, b = mkp(con, "A"), mkp(con, "B")
+    counted(con, a, b, [(6, 4)])
+    s1 = db.rating_state(con)["singles"][a]
+    s2 = db.rating_state(con)["singles"][a]
+    assert s1 == s2                                 # deterministic recompute-on-read

@@ -249,7 +249,6 @@ def require_schema(con):
 
 
 def init_db(path=DB_PATH):
-    _RATING_CACHE.clear()
     if _is_pg():
         con = connect(path)
         require_schema(con)     # live PG is already migrated; verify, never create/patch

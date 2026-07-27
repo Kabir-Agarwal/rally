@@ -94,6 +94,11 @@ def update_password(user_token: str, new_password: str) -> bool:
 
 
 # ---- pure request logic (unit-tested; Supabase calls injected) --------------------------------
+# CLEAN-FOUNDATION reconciliation: players.id IS the auth user id (auth.users.id) and there is NO
+# auth_id / password_set column anymore. So: code -> players.id (the uuid) -> email (server-side)
+# -> password grant. The "Google-only, set a password first" distinction relied on the dropped
+# password_set flag; without it we return the generic 401 and surface Google-only guidance in the
+# UI instead. (Follow-up: re-add a password flag if we want the specific server message back.)
 def player_signin(con, code, password, ip, now=None, email_lookup=None, grant=None):
     """Returns (http_status, body_dict). Never leaks email or whether a code exists (uniform 401)."""
     now = time.time() if now is None else now
@@ -104,15 +109,12 @@ def player_signin(con, code, password, ip, now=None, email_lookup=None, grant=No
         return 400, {"error": "player ID and password required"}
     if not _rate_ok(f"{ip}:{code}", now):
         return 429, {"error": "too many attempts — wait a few minutes"}
-    row = con.execute("SELECT auth_id, password_set FROM players WHERE code=?", (code,)).fetchone()
+    row = con.execute("SELECT id FROM players WHERE code=?", (code,)).fetchone()
     if not row:
         return 401, GENERIC_401
-    auth_id = _row_get(row, "auth_id", 0)
-    password_set = _row_get(row, "password_set", 1)
+    auth_id = _row_get(row, "id", 0)               # the player id IS the auth user id (uuid)
     if not auth_id:
         return 401, GENERIC_401
-    if not password_set:
-        return 409, {"error": GOOGLE_ONLY_MSG}     # Google-only: specific, actionable message
     email = email_lookup(str(auth_id))             # server-side only
     if not email:
         return 401, GENERIC_401
@@ -123,12 +125,10 @@ def player_signin(con, code, password, ip, now=None, email_lookup=None, grant=No
 
 
 def do_set_password(con, auth_sub, new_password, user_token, updater=None):
-    """Returns (http_status, body). Flips players.password_set=1 for every row of this auth user."""
+    """Returns (http_status, body). Sets the caller's Supabase password (no local flag to flip now)."""
     updater = updater or update_password
     if len(new_password or "") < 8:
         return 400, {"error": "password must be at least 8 characters"}
     if not updater(user_token, new_password):
         return 400, {"error": "could not set password"}
-    con.execute("UPDATE players SET password_set=1 WHERE auth_id=?", (auth_sub,))
-    con.commit()
     return 200, {"ok": True}

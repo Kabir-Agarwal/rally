@@ -62,16 +62,23 @@ window.Auth = (function () {
   })();
 
   var _cfg = null;
+  // Fetch the server auth config. NEVER falls back to "mock" (that was a fail-open into a dead end:
+  // a stall showed a guest button the server refuses). Retries with backoff, 10s per attempt; only a
+  // real server answer is cached. On total failure returns {mode:"error"} — NOT cached, NOT mock.
   async function config() {
     if (_cfg) return _cfg;
-    // bounded so the sign-in screen never hangs on "…" if /api/auth/config stalls
-    var timeout = new Promise(function (res) { setTimeout(function () { res({ mode: "mock" }); }, 4000); });
-    try {
-      _cfg = await Promise.race([fetch("/api/auth/config").then(function (r) { return r.json(); }), timeout]);
-    } catch (e) { _cfg = { mode: "mock" }; }
-    if (!_cfg || !_cfg.mode) _cfg = { mode: "mock" };
-    return _cfg;
+    var backoff = [500, 1500];                 // between the 3 attempts (>= 2 retries)
+    for (var attempt = 0; attempt < 3; attempt++) {
+      var to = new Promise(function (res) { setTimeout(function () { res(null); }, 10000); });  // 10s
+      try {
+        var r = await Promise.race([fetch("/api/auth/config").then(function (x) { return x.json(); }), to]);
+        if (r && r.mode) { _cfg = r; return _cfg; }   // cache ONLY a genuine answer
+      } catch (e) { /* retry */ }
+      if (attempt < 2) await new Promise(function (res) { setTimeout(res, backoff[attempt]); });
+    }
+    return { mode: "error" };                   // unreachable -> explicit error, not a usable fallback
   }
+  function resetConfig() { _cfg = null; }        // used by the Retry button; don't poison the page load
   async function refreshEmail() {
     try {
       var j = await (await fetch("/api/auth/me", { headers: headers() })).json();
@@ -147,12 +154,25 @@ window.Auth = (function () {
     return '<div class="muted" style="text-align:center;margin:0 0 10px;color:#c0392b">' + esc(msg.slice(0, 200)) + '</div>';
   }
 
+  function _retryCard(host, onDone, msg) {
+    host.innerHTML = SHELL(
+      '<div class="muted" style="text-align:center;color:#c0392b;margin-bottom:10px">' + esc(msg) + '</div>' +
+      '<button class="btn" id="auRetry">Retry</button>');
+    host.querySelector("#auRetry").onclick = function () { resetConfig(); renderSignIn(host, onDone); };
+  }
+
   async function renderSignIn(host, onDone) {
     host.innerHTML = SHELL('<div class="muted" style="text-align:center">…</div>');
     var fl = failLine();
     var cfg = await config();
+    if (cfg.mode === "error") {                 // couldn't reach the server -> retry, never a dead button
+      _retryCard(host, onDone, "Couldn't reach the server — retry");
+      return;
+    }
     if (cfg.mode !== "supabase") {
-      // FALLBACK: a single Continue button. No Google, no email, no code — ever.
+      // Guest "Continue" is rendered ONLY when the server explicitly allows it (cfg.guest). Never
+      // as a fallback, and never when guest sign-in is disabled server-side.
+      if (!cfg.guest) { _retryCard(host, onDone, "Sign-in isn't available right now — retry"); return; }
       host.innerHTML = SHELL(fl + '<button class="btn" id="auGo">Continue</button>');
       var err = host.querySelector("#auErr");
       host.querySelector("#auGo").onclick = async function () {
@@ -198,7 +218,7 @@ window.Auth = (function () {
     token: token, email: email, signedIn: signedIn, headers: headers, signOut: signOut,
     refreshToken: refreshToken, refreshSession: refreshSession,
     google: google, guest: guest, emailStart: emailStart, emailVerify: emailVerify,
-    config: config, refreshEmail: refreshEmail, renderSignIn: renderSignIn,
+    config: config, resetConfig: resetConfig, refreshEmail: refreshEmail, renderSignIn: renderSignIn,
     lastReturn: lastReturn, recordReturn: recordReturn, clearLastReturn: clearLastReturn
   };
 })();

@@ -47,6 +47,14 @@ def test_mock_google_signin(tmp_path):
     assert c.get("/api/auth/config").json()["mode"] == "mock"
 
 
+def test_config_reports_guest_allowed(tmp_path):
+    # The client renders the guest "Continue" button only when the server says guest is allowed.
+    appmod, c = _fresh(tmp_path)
+    cfg = c.get("/api/auth/config").json()
+    assert cfg["mode"] == "mock" and cfg["guest"] is True     # mock mode -> guest allowed
+    # (in supabase mode guest is False; the endpoint guest sign-in also 400s — see test_signin)
+
+
 def test_first_signin_self_creates_player_with_code(tmp_path):
     # NEW model: no admin-added players — a signed-in user with no player gets needs_name, then
     # /api/me/claim creates a GLOBAL player with a permanent code.

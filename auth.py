@@ -138,8 +138,11 @@ def google_mock(email: str = "tester@gmail.com"):
 
 
 def client_config():
-    """Public config the browser needs. anon key is designed to be public."""
-    return {"mode": AUTH_MODE, "supabase_url": SUPABASE_URL, "anon_key": SUPABASE_ANON_KEY}
+    """Public config the browser needs. anon key is designed to be public. `guest` tells the client
+    whether the guest "Continue" button is allowed — only in mock mode; the client must honour it and
+    never render a guest button the server would refuse."""
+    return {"mode": AUTH_MODE, "supabase_url": SUPABASE_URL, "anon_key": SUPABASE_ANON_KEY,
+            "guest": AUTH_MODE == "mock"}
 
 
 if __name__ == "__main__":

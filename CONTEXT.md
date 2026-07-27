@@ -163,6 +163,40 @@ applied or committed.
   logger_player_id, player_links) on LIVE production data. Kabir must decide the merge before any
   SQL is finalized. Recorded in the deliverable's CONTRADICTIONS.
 
+## CLEAN FOUNDATION rewrite (2026-07-27, Option C) — PHASE 1 done, NOT deployed (latest)
+Live Postgres was rebuilt clean (global uuid identity; migration rally_clean_foundation, applied by
+the orchestrator). The app code is being rewired to it. **This is partial — do NOT deploy until the
+HTTP routes + client are rewired and a match can be scored over HTTP.**
+- **DONE + self-tested (committed):**
+  - `db.py` — full rewrite to the clean schema: global `players.id = auth.users.id` (uuid), `code`,
+    `game_name`; `matches.group_id` NULLABLE; new status set (live/frozen/pending_approval/counted/
+    disputed/deleted); friendships (one row/pair, a<b), name_history, group_members,
+    group_join_requests, approvals, freeze_requests. Portable: uuids + codes generated in Python so
+    ONE query path serves both the migrated Postgres and local SQLite. Code alphabet A-Z2-9 minus
+    O,0,I,1,L. **No auto-migration** — `require_schema()` FAILS LOUD at startup if the DB isn't
+    migrated (the old silent try/except ALTER path is deleted).
+  - `logic.py` — new lifecycle: score with NO group; `finish` -> pending_approval (logger
+    auto-approves); a match COUNTS only when every participant approves; withdrawing an approval on a
+    counted match drops it to pending_approval and **rolls ratings back** (ratings recompute-on-read
+    from status='counted' only); freeze/resume each need every participant. Self-tests green.
+  - `auth_playerid.py` + `test_playerid.py` — reconciled to the new schema (players.id IS the auth
+    id; dropped auth_id/password_set refs). App imports + validates the new schema at startup (boots
+    at the process level).
+- **REMAINING (next phase, large):** rewrite `app.py` (~40 routes still call old helpers /
+  require_group; convert /g/<code>/api/* to global /api/* with an optional ?group= filter; /api/me
+  creates a global player on first sign-in), `auth`/identity route, the client (`static/app.js`,
+  `static/log.js` — swap all `/g/${GROUP.code}/api/*` to `/api/*`, make GROUP optional, delete the
+  YOU/YOUR GROUPS landing gate so `/` serves the SPA on Live), `templates/shell.html` +
+  `landing.html`, `schema.py`, and the ENTIRE old test suite (test_tennis/app/admin/auth/names/
+  onboarding/one_live/signin/cache/consistency/db_backend/perf/ratings_dominance/ui_support — all
+  assume the dead integer/per-group model and are currently red). Friends/groups-admin/approval-
+  freeze-resume are implemented at the DATA layer; their HTTP routes + UI still need wiring.
+- **RULES now enforced in the data layer:** membership != friendship (separate tables); court picker
+  must read `db.accepted_friends` only; public group = instant join, private = `group_join_requests`
+  the admin approves; delete group -> matches.group_id=NULL + former_group_name kept; count only on
+  full approval; undo-approval rolls back; freeze/resume need all participants. RLS still DISABLED on
+  live (owner-deferred; do not touch here).
+
 ## UI rebuild to approved mockup v9 (latest)
 Rebuilt the drifted SCREENS to match `docs/mockup-v9.jsx` (the palette already matched; the
 layouts did not). Full drift audit in `docs/drift-inventory.md`. Suite: 81 Python + boot/engine/

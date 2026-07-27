@@ -163,7 +163,34 @@ applied or committed.
   logger_player_id, player_links) on LIVE production data. Kabir must decide the merge before any
   SQL is finalized. Recorded in the deliverable's CONTRADICTIONS.
 
-## Sign-in fail-open + group-delete re-render + boot perf (2026-07-27) — deployed (latest)
+## Friends UI (2026-07-27) — deployed (latest)
+Deployed dpl_GmFWEbNRZTSUEoA3h1Zu618A4HmH (READY), hash e8469aa122. 99 Python + Node green.
+Pure CLIENT work — the friend ROUTES already existed (built in Phase 2), nothing new server-side:
+  GET /api/players/search?q= · POST /api/friend/request {id|code} · POST /api/friend/accept {id} ·
+  POST /api/friend/decline {id} · GET /api/friends {friends,pending}.
+- **Task 1 (YOU card):** shows Name#CODE (from ME.code) with Copy (copies the code) and Share (Web
+  Share API / clipboard fallback) of a `/?add=CODE` link; on boot that deep link lands on the Groups
+  tab and prefills the search so the recipient can friend the sharer.
+- **Task 2 (Add someone):** new section ABOVE groups — one search box (game name OR code) ->
+  /api/players/search; each result shows game name (bold), real name, and #code; "Add friend" ->
+  /api/friend/request {id}, row then reads "requested"; failure shows why (never a dead tap). Self is
+  filtered out.
+- **Task 3 (Friend requests):** section shown ONLY when /api/friends.pending is non-empty; each row
+  Accept (/api/friend/accept) / Decline (/api/friend/decline); uses the pending list, no second source.
+- **Task 4 (Friends):** section listing /api/friends.friends; empty state "No friends yet. Adding a
+  friend is how you get someone into a match." Friends is the ONLY thing feeding the picker.
+- **Task 5 (loop closed):** verified end-to-end locally (mock, two players): search Bob -> request ->
+  Bob accepts -> Bob in /api/friends.friends and in /api/meta -> entering the Log tab refreshes meta ->
+  Bob is a placeable chip -> both place -> Start becomes "▶ Start" (enabled). Note: the Log picker
+  refreshes meta on tab (re)entry (and after start), not on a timer — the owner accepts on Groups then
+  opens Log, which works; it won't live-update if you're already sitting on Log when a request is
+  accepted elsewhere.
+- Group membership still does NOT create a friendship (separate). No restyle — reused .card/.lbrow/.btn.
+- **UNVERIFIED BY ME:** no signed-in session / no second device here — the real two-phone add/accept/
+  decline and mobile Copy/Share (navigator.share) need his devices. Verified live only anonymously
+  (app boots, search 200, the Friends UI code shipped at hash e8469aa122).
+
+## Sign-in fail-open + group-delete re-render + boot perf (2026-07-27) — deployed (earlier)
 Deployed dpl_ASEiYji9ZcJafbyrbxD9oYRei6xs (READY), hash 493c1a12ba. 97 Python + Node green.
 - **Task 1 (sign-in dead end):** `auth.js config()` used to fall back to `{mode:"mock"}` on a 4s
   timeout or any thrown fetch AND cache it — so a slow/blocked request on a 2nd device showed a

@@ -232,13 +232,26 @@ def _relationship(con, me_pid, other_id):
     return _rel_from_map({other_id: f} if f else {}, me_pid, other_id)
 
 
+def _board_players(con, group_id):
+    """The board's players, each already carrying a `live` flag, in ONE round trip.
+
+    PERF: this was live_player_ids() plus the player list — two sequential round trips. Measured
+    on production, a round trip to Supabase costs ~0.3s and dominates everything else on this
+    endpoint (anonymous /api/live makes ZERO queries and still takes 0.53s, so the query cost is
+    almost entirely per-trip latency, not query work). Merging beats optimising.
+    """
+    live = ("EXISTS(SELECT 1 FROM match_players mp JOIN matches m ON m.id=mp.match_id "
+            "WHERE mp.player_id=p.id AND m.status='live') AS live")
+    if group_id:
+        return con.execute(
+            f"SELECT p.*, {live} FROM players p JOIN group_members gm ON gm.player_id=p.id "
+            f"WHERE gm.group_id=? ORDER BY LOWER(p.game_name)", (group_id,)).fetchall()
+    return con.execute(f"SELECT p.*, {live} FROM players p ORDER BY LOWER(p.game_name)").fetchall()
+
+
 def leaderboard_rows(con, group_id, mode, me_pid=None):
     st = db.rating_state(con, group_id)
-    live_ids = live_player_ids(con)
-    if group_id:
-        players = db.members_of(con, group_id)
-    else:
-        players = con.execute("SELECT * FROM players ORDER BY LOWER(game_name)").fetchall()
+    players = _board_players(con, group_id)
     # One friendships query for the whole board, not one per row.
     fmap = db.friend_map(con, me_pid) if me_pid else {}
     rows = []
@@ -247,7 +260,7 @@ def leaderboard_rows(con, group_id, mode, me_pid=None):
         rows.append({"id": p["id"], "name": p["game_name"], "real_name": p["real_name"],
                      "code": p["code"], "rel": _rel_from_map(fmap, me_pid, p["id"]),
                      "rating": round(st[mode].get(p["id"], START)), "n": n,
-                     "provisional": n < ratings.MIN_MATCHES, "live": p["id"] in live_ids, "group": None})
+                     "provisional": n < ratings.MIN_MATCHES, "live": bool(p["live"]), "group": None})
     return rows
 
 

@@ -84,3 +84,27 @@ def test_crossing_five_matches_moves_a_row_into_the_ranked_block(app_client):
     assert after["provisional"] == [], "5 matches -> nobody is provisional any more"
     assert [r["rank"] for r in after["rows"]] == [1, 2]
     assert after["rows"] == after["ranked"]
+
+
+def test_live_flag_marks_only_players_in_a_live_match(app_client):
+    """The board's `live` flag now comes from an EXISTS joined into the player query rather than
+    a separate live_player_ids() round trip. Same answer, so pin the answer."""
+    c = app_client
+    a, ha = signin(c, "a", "Ann")
+    b, hb = signin(c, "b", "Bob")
+    signin(c, "z", "Zoe")                       # not playing
+
+    def live_by_id():
+        return {r["id"]: r["live"] for r in c.get("/api/leaderboard?mode=singles").json()["rows"]}
+
+    assert live_by_id() == {a: False, b: False, "z": False}, "nothing is live yet"
+
+    mid = c.post("/api/match/start",
+                 json={"kind": "singles", "side1": [a], "side2": [b], "group": None},
+                 headers=ha).json()["id"]
+    assert live_by_id() == {a: True, b: True, "z": False}, "only the two in the live match"
+
+    c.post(f"/api/match/{mid}/sets", json={"sets": [[6, 4]]}, headers=ha)
+    c.post(f"/api/match/{mid}/finish", json={}, headers=ha)
+    c.post(f"/api/match/{mid}/approve", json={}, headers=hb)
+    assert live_by_id() == {a: False, b: False, "z": False}, "finished match is no longer live"

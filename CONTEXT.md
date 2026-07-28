@@ -1,6 +1,50 @@
 # CONTEXT.md — Rally (tennis scorer)
 
-## /api/leaderboard — 1.505s -> 1.30s, and the real cost model (2026-07-28, latest)
+## THE BIG ONE — functions moved to bom1, next to the DB (2026-07-28, latest)
+**`vercel.json` now pins `"regions": ["bom1"]`. Every endpoint got 3-7x faster. This single line
+was worth more than every query optimisation in this file combined.**
+
+Root cause, verified rather than assumed: the Vercel functions ran in **iad1 (Virginia)** while
+the Supabase project `rally` lives in **ap-south-1 (Mumbai)** — confirmed via the Supabase API,
+which reports `"region": "ap-south-1"`. Every DB round trip crossed ~12,000km. That is the whole
+explanation for the "~0.25s per round trip + ~0.53s floor" cost model recorded below: the floor
+was the India-client -> iad1 hop, and each query added a Virginia<->Mumbai return trip.
+
+`bom1` is Vercel's Mumbai region, so the function now sits in the same city as the database.
+
+### Before/after — LIVE production, perf_probe medians of 6, cold call discarded
+| endpoint | BEFORE (iad1), 2 runs | AFTER (bom1), 3 runs | speed-up |
+|---|---|---|---|
+| `/api/leaderboard` | 1.324s / 1.291s → **~1.31s** | 0.255s / 0.176s / 0.184s → **~0.18s** | **~7x** |
+| `/api/live` | 0.531s / 0.532s → **~0.53s** | 0.165s / 0.166s / 0.160s → **~0.17s** | **~3x** |
+| `/api/me` | 0.561s / 0.530s → **~0.55s** | 0.164s / 0.165s / 0.155s → **~0.16s** | **~3.4x** |
+| `/api/auth/config` (no DB) | 0.342s / 0.355s → **~0.35s** | 0.173s / 0.144s / 0.162s → **~0.16s** | **~2.2x** |
+
+(The one outlier, 0.255s, was a cold start; the two warm runs agree at 0.176/0.184s.)
+
+**The per-round-trip cost collapsed from ~250ms to ~10ms.** Measured the same way as before:
+`/api/leaderboard` makes 2 DB round trips and `/api/live` makes 0, and they now differ by just
+0.019s — about **10ms per round trip, down from ~250ms. A 25x drop.**
+
+### What this means for the earlier work (worth being honest about)
+The two query fixes below are still correct, but their *absolute* value just shrank by ~25x,
+because a round trip is no longer expensive. The honest ranking of this session's leaderboard
+work: **region move (1.31s → 0.18s) >> removing one round trip (1.505s → 1.31s) > the N+1 fix
+(~0s today).** The N+1 fix still earns its place — it is O(1) instead of O(matches), so it stops
+the endpoint degrading as real data arrives — but the round-trip *count* is no longer the thing to
+design around. **The new rule for this stack: keep functions in the same region as the database;
+after that, query count is a second-order concern.**
+
+Verified after the move: deployment `dpl_FueZUEYPY3YVDFtwdcqPzUKDtrPN` reports
+`"regions": ["bom1"]` (was `["iad1"]`), and at runtime `x-vercel-id` is now `bom1::bom1::…`
+(was `bom1::iad1::…`) — edge and compute both in Mumbai. Page loads anonymously, renders the
+sign-in screen, zero console errors; `/api/leaderboard` payload byte-for-byte equivalent
+(2 players, 0 counted matches, `scope: everyone`).
+
+Not used: `functionFailoverRegions` (Enterprise-only). A single default region via the documented
+top-level `regions` key works on this plan — the deploy is the proof.
+
+## /api/leaderboard — 1.505s -> 1.30s, and the real cost model (2026-07-28, earlier)
 Two separate fixes. **Only the second one moved the live number**, and the reason why is the
 important part.
 

@@ -1,4 +1,4 @@
-"""Auth for Rally (Task 4). Supabase Auth (Google + email OTP) when SUPABASE_URL +
+"""Auth for Rally. Supabase Auth (Google) when SUPABASE_URL +
 SUPABASE_ANON_KEY are set; otherwise a self-contained LOCAL MOCK so everything is testable
 without keys. Server verifies a bearer token on every write. No phone/SMS.
 
@@ -20,9 +20,6 @@ SUPABASE_URL = (os.environ.get("SUPABASE_URL") or "").rstrip("/")
 SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY") or ""
 AUTH_MODE = "supabase" if (SUPABASE_URL and SUPABASE_ANON_KEY) else "mock"
 _SECRET = (os.environ.get("AUTH_SECRET") or os.environ.get("ADMIN_KEY") or "dev-auth-secret").encode()
-
-# in-process OTP store (mock mode, dev only — serverless containers are per-instance)
-_OTP: dict[str, str] = {}
 
 
 def _b64(b: bytes) -> str:
@@ -160,79 +157,6 @@ def bearer(request) -> str | None:
 
 
 # --- sign-in flows --------------------------------------------------------
-def start_email_otp(email: str):
-    email = (email or "").strip().lower()
-    if not email or "@" not in email:
-        return {"error": "valid email required"}
-    if AUTH_MODE == "mock":
-        code = f"{secrets.randbelow(1000000):06d}"
-        _OTP[email] = code
-        # dev_code is returned ONLY in mock mode so the flow is testable without a mailbox.
-        return {"sent": True, "dev_code": code}
-    try:
-        req = urllib.request.Request(
-            f"{SUPABASE_URL}/auth/v1/otp",
-            data=json.dumps({"email": email, "create_user": True}).encode(),
-            headers={"apikey": SUPABASE_ANON_KEY, "Content-Type": "application/json"},
-            method="POST",
-        )
-        urllib.request.urlopen(req, timeout=8).read()
-        return {"sent": True}
-    except Exception as e:
-        return {"error": f"could not send code: {e}"}
-
-
-# Which token types a mailed 6-digit code can be, in the order worth trying.
-#
-# A FIRST-TIME email lands in Supabase's "Confirm signup" template, and that code verifies as
-# type 'signup'. A RETURNING user lands in "Magic Link", which verifies as 'email'. We cannot
-# know which the user is before they type the code, and sending the wrong type fails the whole
-# sign-in — which is exactly what the first external user hit. So try the plausible types.
-# 'email' is first because returning users are the common case once an account exists.
-_VERIFY_TYPES = ("email", "signup", "magiclink")
-
-
-def verify_email_otp(email: str, code: str):
-    email = (email or "").strip().lower()
-    code = (code or "").strip()
-    if AUTH_MODE == "mock":
-        if _OTP.get(email) and hmac.compare_digest(_OTP[email], code):
-            _OTP.pop(email, None)
-            return {"token": mint_mock_token(f"email:{email}", email), "email": email}
-        return {"error": "invalid code"}
-    detail = ""
-    for kind in _VERIFY_TYPES:
-        try:
-            req = urllib.request.Request(
-                f"{SUPABASE_URL}/auth/v1/verify",
-                data=json.dumps({"type": kind, "email": email, "token": code}).encode(),
-                headers={"apikey": SUPABASE_ANON_KEY, "Content-Type": "application/json"},
-                method="POST",
-            )
-            with urllib.request.urlopen(req, timeout=8) as r:
-                d = json.loads(r.read())
-            if d.get("access_token"):
-                return {"token": d["access_token"], "email": email}
-        except Exception as e:
-            detail = detail or _otp_error_detail(e)
-    # Surface Supabase's own reason ("Token has expired or is invalid") instead of a flat
-    # "invalid code" — an expired code and a mistyped one need different things from the user.
-    return {"error": detail or "invalid code"}
-
-
-def _otp_error_detail(e) -> str:
-    """Supabase's human-readable reason for a rejected code, if it gave one."""
-    body = getattr(e, "read", None)
-    if not body:
-        return ""
-    try:
-        d = json.loads(body())
-    except Exception:
-        return ""
-    msg = d.get("error_description") or d.get("msg") or d.get("message") or ""
-    return str(msg)[:200]
-
-
 def google_mock(email: str = "tester@gmail.com"):
     """Mock 'Continue with Google' — deterministic identity for local dev/tests."""
     email = (email or "tester@gmail.com").strip().lower()
@@ -253,8 +177,4 @@ if __name__ == "__main__":
     assert verify_token(t)["email"] == "x@y.com"
     assert verify_token("mock.bad.sig") is None
     assert verify_token(None) is None
-    r = start_email_otp("a@b.com")
-    assert r["sent"] and "dev_code" in r
-    assert "token" in verify_email_otp("a@b.com", r["dev_code"])
-    assert "error" in verify_email_otp("a@b.com", "000000")
     print("OK auth")

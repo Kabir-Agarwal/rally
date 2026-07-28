@@ -294,17 +294,22 @@ def api_auth_config():
     return auth.client_config()
 
 
+# Email sign-in is REMOVED (2026-07-28). Supabase mails a link, not a code, unless its email
+# templates carry {{ .Token }} — and those templates cannot be edited without configuring custom
+# SMTP, so the flow was broken by the platform, not by us. Google is now the only way to make an
+# account; existing players can also use player code + password. These two routes stay only to
+# answer old cached clients with something honest instead of a 404 or a hang.
+_EMAIL_GONE = {"error": "email sign-in removed — continue with Google"}
+
+
 @app.post("/api/auth/email/start")
 async def api_auth_email_start(request: Request):
-    d = await request.json()
-    return auth.start_email_otp(d.get("email", ""))
+    return JSONResponse(_EMAIL_GONE, 410)
 
 
 @app.post("/api/auth/email/verify")
 async def api_auth_email_verify(request: Request):
-    d = await request.json()
-    r = auth.verify_email_otp(d.get("email", ""), d.get("code", ""))
-    return JSONResponse(r, 401) if "error" in r else r
+    return JSONResponse(_EMAIL_GONE, 410)
 
 
 @app.post("/api/auth/google")

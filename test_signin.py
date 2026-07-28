@@ -42,8 +42,27 @@ def test_no_dev_code_shown_in_client_or_pages(tmp_path):
     appmod, c = _fresh(tmp_path)
     js = (Path(__file__).parent / "static" / "auth.js").read_text(encoding="utf-8")
     assert "Dev mode" not in js and "dev_code" not in js
-    tok = c.post("/api/auth/guest", json={"device_id": "d"}).json()["token"]
-    c.post("/api/me/claim", json={"name": "Zed"}, headers={"Authorization": "Bearer " + tok})
-    dev = c.post("/api/auth/email/start", json={"email": "x@y.com"}).json().get("dev_code", "ZZZ")
-    for path in ["/", "/live", "/groups"]:
-        assert dev not in c.get(path).text
+
+
+def test_email_sign_in_is_gone(tmp_path):
+    """Email sign-in was removed: Supabase mails a LINK unless its templates carry {{ .Token }},
+    and those need custom SMTP to edit. Old cached clients must get an honest 410, and no email
+    or 6-digit-code UI may remain in the bundle."""
+    appmod, c = _fresh(tmp_path)
+    for path in ("/api/auth/email/start", "/api/auth/email/verify"):
+        r = c.post(path, json={"email": "x@y.com", "code": "123456"})
+        assert r.status_code == 410, f"{path} -> {r.status_code}"
+        assert "removed" in r.json()["error"]
+
+    js = (Path(__file__).parent / "static" / "auth.js").read_text(encoding="utf-8")
+    for gone in ("auEmail", "auCode", "auOtpBox", "email/start", "email/verify", "6-digit"):
+        assert gone not in js, f"email sign-in leftover in the UI bundle: {gone}"
+    assert not hasattr(appmod.auth, "start_email_otp"), "server-side email OTP should be deleted"
+
+
+def test_signed_out_screen_offers_exactly_google_and_player_id(tmp_path):
+    appmod, c = _fresh(tmp_path)
+    js = (Path(__file__).parent / "static" / "auth.js").read_text(encoding="utf-8")
+    assert "Continue with Google" in js
+    assert "Player ID + password" in js
+    assert "New here? Continue with Google." in js

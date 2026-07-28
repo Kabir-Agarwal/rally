@@ -1,6 +1,6 @@
 "use strict";
 /* Rally client auth. Token in localStorage; Bearer sent on writes. Sign-in screen is inline
-   (no popups): "Continue with Google" / "Continue with email" (6-digit OTP).
+   (no popups): "Continue with Google" / "Player ID + password".
    - Real Supabase mode (SUPABASE_URL + SUPABASE_ANON_KEY set): Google uses the real Supabase
      OAuth redirect (opens the Google account chooser); the server verifies the returned token.
    - No keys: falls back silently to a local mock so the app keeps working. */
@@ -122,8 +122,14 @@ window.Auth = (function () {
     }
     var r = await _post("/api/auth/google", { email: em }); set(r.token, r.email); return r;
   }
-  async function emailStart(em) { return _post("/api/auth/email/start", { email: em }); }
-  async function emailVerify(em, code) { var r = await _post("/api/auth/email/verify", { email: em, code: code }); set(r.token, r.email); return r; }
+  // Player ID + password. The server returns a session token our own middleware accepts; it
+  // never returns the player's email (the leaderboard prints player IDs publicly, so a
+  // code -> email lookup would turn it into an email directory).
+  async function playerSignin(pid, pw) {
+    var r = await _post("/api/auth/player-id", { player_id: pid, password: pw });
+    set(r.token || r.access_token, "", r.refresh_token);
+    return r;
+  }
 
   // Fallback (mock) mode: one "Continue" that is UNIQUE PER DEVICE. A random device id is
   // generated once and reused, so this phone always returns as the same account.
@@ -188,43 +194,46 @@ window.Auth = (function () {
       };
       return;
     }
-    // REAL: Google + email OTP. The OTP code is typed by the user and never shown on screen.
+    // REAL: exactly two paths. Google is the ONLY way to create an account; player ID + password
+    // is an alternate sign-in for players who already exist and have set one. Email sign-in was
+    // removed — Supabase mails a link rather than a code unless its templates carry {{ .Token }},
+    // and those cannot be edited without custom SMTP.
     host.innerHTML = SHELL(fl +
       '<button class="btn" id="auGoogle">Continue with Google</button>' +
       '<div class="muted" style="text-align:center;margin:12px 0 6px">or</div>' +
-      '<div id="auEmailBox"><input id="auEmail" type="email" placeholder="you@email.com" autocomplete="email">' +
-      '<button class="btn ghost" style="margin-top:8px" id="auSend">Continue with email</button></div>' +
-      '<div id="auOtpBox" style="display:none"><div class="muted" id="auOtpNote" style="margin-bottom:6px"></div>' +
-      '<input id="auCode" inputmode="numeric" maxlength="6" placeholder="6-digit code">' +
-      '<button class="btn" style="margin-top:8px" id="auVerify">Verify</button></div>');
+      '<button class="btn ghost" id="auPwToggle">Player ID + password</button>' +
+      '<div id="auPwBox" style="display:none;margin-top:8px">' +
+      '<input id="auPid" placeholder="Player ID (e.g. 44YZC)" autocapitalize="characters" autocomplete="username" maxlength="8">' +
+      '<input id="auPw" type="password" placeholder="Password" autocomplete="current-password" style="margin-top:8px">' +
+      '<button class="btn" style="margin-top:8px" id="auPwGo">Sign in</button></div>' +
+      '<div class="muted" style="text-align:center;margin-top:14px">New here? Continue with Google.</div>');
     var err = host.querySelector("#auErr");
     var showErr = function (e) { err.textContent = e; };
     host.querySelector("#auGoogle").onclick = async function () {
       showErr(""); try { await google(); onDone(); } catch (e) { showErr(e); }
     };
-    host.querySelector("#auSend").onclick = async function () {
+    var pwBox = host.querySelector("#auPwBox");
+    host.querySelector("#auPwToggle").onclick = function () {
       showErr("");
-      var em = host.querySelector("#auEmail").value.trim();
-      if (!em) return showErr("enter your email");
-      try {
-        var r = await emailStart(em);
-        if (r.error) return showErr(r.error);
-        host.querySelector("#auEmailBox").style.display = "none";
-        host.querySelector("#auOtpBox").style.display = "block";
-        host.querySelector("#auOtpNote").textContent = "Code sent to " + em;   // never the code
-        host.querySelector("#auVerify").onclick = async function () {
-          showErr("");
-          var code = host.querySelector("#auCode").value.trim();
-          try { await emailVerify(em, code); onDone(); } catch (e) { showErr(e); }
-        };
-      } catch (e) { showErr(e); }
+      pwBox.style.display = pwBox.style.display === "none" ? "block" : "none";
+      if (pwBox.style.display === "block") host.querySelector("#auPid").focus();
     };
+    host.querySelector("#auPwGo").onclick = async function () {
+      showErr("");
+      var pid = host.querySelector("#auPid").value.trim();
+      var pw = host.querySelector("#auPw").value;
+      if (!pid || !pw) return showErr("player ID and password required");
+      try { await playerSignin(pid, pw); onDone(); } catch (e) { showErr(e); }
+    };
+    host.querySelector("#auPw").addEventListener("keydown", function (e) {
+      if (e.key === "Enter") host.querySelector("#auPwGo").click();
+    });
   }
 
   return {
     token: token, email: email, signedIn: signedIn, headers: headers, signOut: signOut,
     refreshToken: refreshToken, refreshSession: refreshSession,
-    google: google, guest: guest, emailStart: emailStart, emailVerify: emailVerify,
+    google: google, guest: guest, playerSignin: playerSignin,
     config: config, resetConfig: resetConfig, refreshEmail: refreshEmail, renderSignIn: renderSignIn,
     lastReturn: lastReturn, recordReturn: recordReturn, clearLastReturn: clearLastReturn
   };

@@ -1,6 +1,21 @@
 # CONTEXT.md — Rally (tennis scorer)
 
-## Boot speed + header + Ranks (2026-07-28) — built & tested, **NOT DEPLOYED** (latest)
+## 2026-07-28-MERGE-AND-DEPLOY dispatch — merged & tested, deploy BLOCKED (latest)
+Task 1 done: PR #1 (`claude/rally-boot-header-ranks-d9n93p`, base `6acc531`, clean/no conflicts
+per `mergeable_state` and a `git merge-tree` dry run) fast-forwarded into `master` and pushed —
+master is now `4717afa`, +1163/-83 as expected. Task 2 done: full suite green on merged master —
+116 pytest, and all three Node suites (`test_boot.cjs` 18 checks, `test_engine.cjs`,
+`test_sync.cjs`) OK. **Task 3 STOPPED — no `VERCEL_TOKEN` in this environment either** (checked
+env, `~/.vercel`, git config, `.env` — none exist; confirmed via the Vercel API that production
+is still `dpl_1AJQ8EkguHXcuLtGqGjgWeYZb5sV`, i.e. master `6acc531`, unchanged from before this
+merge). Per instruction, no workaround was attempted (the Vercel MCP `deploy_to_vercel` path
+requires the whole file tree inline and was already ruled out as impractical in the prior
+dispatch). **Tasks 4 (live verify) and 5 (perf_probe after-numbers) could not run** — there is no
+new deployment to verify or measure; running `perf_probe.py` against current production would
+only reproduce the existing pre-merge baseline below, not an "after" number for this merge. To
+finish this dispatch: `VERCEL_TOKEN=... python deploy.py`, then re-run Tasks 4 and 5.
+
+## Boot speed + header + Ranks (2026-07-28) — built & tested, **NOT DEPLOYED** (earlier)
 Branch `claude/rally-boot-header-ranks-d9n93p`, on top of master `6acc531` (verified: nothing had
 landed after it). 116 Python + 18 Node boot checks green. Browser-verified with Playwright,
 including an A/B against master. **Deploy is blocked:** no `VERCEL_TOKEN` in this environment —

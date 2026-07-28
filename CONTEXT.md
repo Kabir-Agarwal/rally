@@ -1,6 +1,94 @@
 # CONTEXT.md — Rally (tennis scorer)
 
-## THE BIG ONE — functions moved to bom1, next to the DB (2026-07-28, latest)
+## FIRST EXTERNAL USER FEEDBACK — P1-P4 (2026-07-28, latest)
+Shipped as `c8e06d8` (asset hash `526c67bac0`, live, zero console errors).
+
+### P1 — email sign-in. Code fixed; ONE DASHBOARD STEP STILL NEEDED (owner)
+What the app asks for vs what Supabase sends:
+* The app is already a pure OTP flow — it shows a 6-digit input and calls
+  `/auth/v1/otp` then `/auth/v1/verify`. **No browser hop is intended anywhere.**
+* Supabase decides link-vs-code **from the email template**, per its docs: *"If `{{ .ConfirmationURL }}`
+  is specified in the email template, a magiclink will be sent. If `{{ .Token }}` is specified, an
+  OTP will be sent."* Both default templates ship with `ConfirmationURL`, so it mails a LINK.
+* The user's screenshot said **"Confirm your email address"** — that is the **Confirm signup**
+  template (the default subject), not Magic Link. A first-timer hits that one because we send
+  `create_user: true`.
+
+**Code bug found and fixed:** a code from the *Confirm signup* mail verifies as type `signup`,
+but we only ever sent type `email`, so a brand-new user's code could never work even once the
+template is fixed. `verify_email_otp` now tries `email → signup → magiclink` and returns on the
+first that yields a session (`email` first, so returning users still cost one round trip).
+Failures now surface Supabase's own reason instead of a flat "invalid code".
+
+**>>> OWNER CLICK SHEET — 3 minutes, only you can do this <<<**
+1. Go to **https://supabase.com/dashboard/project/kmaqprycvhngzrykebaa/auth/templates**
+   (Dashboard → your project `rally` → Authentication → Emails → Templates).
+2. Select the **`Confirm signup`** template. Replace the whole message body with:
+   ```html
+   <h2>Your Rally code</h2>
+   <p>Enter this code in Rally to sign in:</p>
+   <p style="font-size:28px;font-weight:bold;letter-spacing:4px">{{ .Token }}</p>
+   <p>The code expires in 1 hour. If you didn't ask for it, ignore this email.</p>
+   ```
+   Subject: `{{ .Token }} is your Rally code`
+3. Select the **`Magic Link`** template and paste the **same body and subject**. (Returning users
+   get this one; new users get Confirm signup. Both must carry the code or half your users break.)
+4. There must be **no `{{ .ConfirmationURL }}` left in either body** — if it is present Supabase
+   sends a link instead of a code.
+5. Go to **Authentication → Sign In / Providers → Email** and check:
+   * **Enable Email provider** — ON.
+   * **Email OTP Expiration** — set `3600` (1 hour). Supabase rejects anything over 86400.
+   * Leave **Confirm email** as is; with `{{ .Token }}` in the Confirm signup template the
+     6-digit code confirms the signup, which our `signup` fallback now handles.
+6. Test: sign in with a never-used address. Expect a 6-digit code, typed in-app, no browser hop.
+
+Until step 2-4 are done the mail still contains a link and no code exists to type. **That part is
+not fixable from this repo** — the template lives in Supabase, not in git.
+
+### P2 — "details not saved". Hypothesis DISPROVEN; a different real bug fixed
+The suggested cause (device-claimed player never meets the authenticated session) **does not
+apply here**: `/api/me/claim` requires an authenticated user, and a player row is keyed by the
+**auth user id** (`db.create_player(con, u["sub"], ...)`). Guest sign-in — the only way to get a
+device-shaped identity — is `AUTH_MODE == "mock"` only, i.e. **disabled in production**. So there
+is no unlinked device player, and nothing to link.
+
+What actually happened: the old flow mailed a LINK. Clicking it opened the mail app's in-app
+browser — a different storage context. Either the sign-in completed *there* (so the details were
+saved, just under a session the user then walked away from) or it came back as a PKCE `?code=`,
+which `auth.js` explicitly does not handle (`"Supabase returned a code, not a token"`) and the
+sign-in silently dead-ended. Fixing P1 removes the hop entirely.
+
+**What a claim does when sign-in happens elsewhere:** nothing is lost. The player follows the
+*account*, so signing in on any device with the same email lands on the same player, and a second
+claim is refused (409) rather than making a duplicate. Pinned by
+`test_player_follows_the_account_not_the_device`.
+
+**Real bug fixed:** that 409 used to trap the user — the "Set up your player" overlay showed the
+error and never closed, so a user whose account was already set up in the other browser could
+never get in. The overlay now re-reads `/api/me` and continues with the existing player.
+
+### P3 — unranked order is now rename-proof
+Unranked players all sit at the same starting rating, so the tie-break WAS their order — and it
+fell through to the query's alphabetical `LOWER(game_name)`. Renaming yourself therefore moved you
+up or down the list for everyone. Now sorted by `(-rating, created_at, code)`: join order,
+tie-broken by the immutable unique code. **Ranked ordering untouched.** Note `db.now()` is
+second-granular, so same-second signups tie and `code` decides — still total and still rename-proof.
+Verified live: rows come back Ace → G → Best (join order); alphabetical would be Ace → Best → G.
+
+### P4 — the "Help" group: a SHARE LINK, not test data (investigated only, nothing changed)
+`Help` (`U75WSC`) is a **real, public** group created 2026-07-27 14:33:57Z by player `G`
+(`R23ZA`), now 3 members. It is not seeded data and there is no auto-join default.
+
+How the fresh account ended up in it — the DB is unambiguous: player `Best` (`KRZPE`) has
+`player_created` **and** `joined_at` both `2026-07-28 14:05:47+00`, the *same second*. They joined
+at the instant their player was created. That is `storePendingJoin()` / `completePendingJoin()` in
+`app.js`: a `/?join=CODE` deep link stores the code in localStorage *before* sign-in, then joins
+as soon as a player exists. `Help` is public, so `/api/group/join` admits immediately with no
+approval. **Verdict: the user opened someone's share link for `Help`, so signup auto-joined them.
+Working as designed — but worth knowing that a share link silently commits a brand-new user to a
+group before they have seen the app.** Nothing deleted, nothing changed.
+
+## THE BIG ONE — functions moved to bom1, next to the DB (2026-07-28, earlier)
 **`vercel.json` now pins `"regions": ["bom1"]`. Every endpoint got 3-7x faster. This single line
 was worth more than every query optimisation in this file combined.**
 

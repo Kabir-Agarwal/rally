@@ -1,5 +1,51 @@
 # CONTEXT.md — Rally (tennis scorer)
 
+## /api/leaderboard — 1.505s -> 1.30s, and the real cost model (2026-07-28, latest)
+Two separate fixes. **Only the second one moved the live number**, and the reason why is the
+important part.
+
+**1. The N+1 in `rating_state()` (`f3fb88a`) — real, proven, but worth 0s today.**
+`rating_state()` replayed every counted match and called `_match_to_dict()` per match, firing 3
+queries each (`match_players`, `match_sets`, `point_logs`): `1 + 3*(counted matches)` sequential
+round trips. Now each child table is read in ONE query joined to the same `status='counted'`
+predicate, grouped in Python; row order preserved by reusing the old ORDER BYs. New test
+`test_leaderboard_query_count_does_not_grow_with_matches` measures it: adding 12 counted matches
+took the endpoint **11 -> 47** round trips before, and leaves it **flat at 9** now.
+**It changed live latency by ~35ms, because production currently holds 2 players and ZERO counted
+matches** — N was 0, so there was no N+1 to pay. It is insurance, not today's win: at ~0.2-0.3s
+per round trip, the old code would have added ~0.6-0.9s **per counted match** as real data lands.
+`test_query_budget` only guarded the PLAYERS axis, which is why this sat unnoticed; the matches
+axis is now guarded too.
+
+**2. The actual win — one less round trip (`3ad591c`): 1.505s -> 1.30s.**
+`live_player_ids()` was a whole round trip just to build a set of ids, so it is now an `EXISTS`
+folded into the board's player query. (`live_player_ids()` stays for its other callers.) Added
+`test_live_flag_marks_only_players_in_a_live_match` — nothing covered that flag before.
+
+### The cost model (measured, and the thing to reason with from now on)
+Anonymous `/api/live` makes **ZERO** DB queries and still takes **0.53s**. Anonymous
+`/api/leaderboard` made **3** and took 1.47s. So:
+* **~0.53s is a fixed floor** — cold-ish function + connection + framework, before any query.
+* **~0.2-0.3s is the cost of EACH sequential Postgres round trip**, essentially regardless of what
+  the query does (production has 2 players; these queries are trivial).
+Therefore on this stack **the only lever that matters is the NUMBER of sequential round trips.**
+Optimising a query body buys nothing; removing a trip buys ~0.25s. `/api/leaderboard` is now 2
+trips (counted matches + players); the floor for it is ~0.53s + 2 trips ≈ 1.0-1.1s. Getting below
+that means merging those two unrelated queries (ugly) or cutting per-trip latency (infra: the
+Vercel function is `iad1`, so a distant/pooled Supabase region is the suspect — not a code fix).
+
+### Before/after on LIVE production (perf_probe medians of 6, cold call discarded)
+| run | `/api/leaderboard` | note |
+|---|---|---|
+| before, 3 runs | 1.497s / 1.505s / **1.510s** | pre-fix baseline, stable |
+| after N+1 fix only | 1.471s / 1.467s | ~35ms — N was 0, as explained above |
+| after both fixes | **1.299s / 1.305s** | ~205ms saved by removing one trip |
+
+**1.505s -> ~1.30s, now inside the ~1.05-1.45s projection** (it was above it). `/api/live`
+unchanged at ~0.54s, `/api/me` ~0.53s, `/api/auth/config` ~0.35s. Live payload verified identical
+(2 players, same fields, `scope: everyone`) and the page still loads anonymously with zero console
+errors. 118 pytest + all three Node suites green.
+
 ## DEPLOYING (read this first) — automatic on push to `master`
 **Git integration is live and verified (2026-07-28).** Vercel project `rally-scorer` is connected
 to `Kabir-Agarwal/rally`, production branch `master`. **To ship: push to `master`.** A production

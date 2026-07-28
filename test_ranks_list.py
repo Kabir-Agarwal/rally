@@ -108,3 +108,36 @@ def test_live_flag_marks_only_players_in_a_live_match(app_client):
     c.post(f"/api/match/{mid}/finish", json={}, headers=ha)
     c.post(f"/api/match/{mid}/approve", json={}, headers=hb)
     assert live_by_id() == {a: False, b: False, "z": False}, "finished match is no longer live"
+
+
+def test_unranked_order_is_stable_across_a_rename(app_client):
+    """P3: unranked players were ordered alphabetically, so renaming reshuffled the board for
+    everyone. Order must follow join order (created_at, then code) and ignore the name."""
+    c = app_client
+    signin(c, "p1", "Zoe")          # joins first, but sorts LAST alphabetically
+    signin(c, "p2", "Ann")
+    signin(c, "p3", "Mia")
+
+    def order():
+        return [r["id"] for r in c.get("/api/leaderboard?mode=singles").json()["rows"]]
+
+    before = order()
+    # NOT the alphabetical order the board used to use — that would be Ann, Mia, Zoe.
+    assert before != ["p2", "p3", "p1"], "unranked order must not be driven by game_name"
+
+    # Rename the first player to sort last alphabetically, and the alphabetically-first to sort
+    # last. Under the old ordering this reshuffled the board for everyone.
+    c.post("/api/me/rename", json={"name": "Aaa"}, headers={"Authorization": _bearer("p1")})
+    c.post("/api/me/rename", json={"name": "Zzz"}, headers={"Authorization": _bearer("p2")})
+    assert order() == before, "a rename must not move anyone on the unranked list"
+
+    # created_at is second-granular (db.now()), so same-second signups tie and the unique,
+    # immutable `code` decides. Either way the order is total and rename-proof.
+    rows = c.get("/api/leaderboard?mode=singles").json()["rows"]
+    keys = [(r.get("created_at") or "", r["code"]) for r in rows]
+    assert keys == sorted(keys), f"unranked rows must be ordered by (created_at, code): {keys}"
+
+
+def _bearer(sub):
+    from conftest import bearer
+    return bearer(sub)

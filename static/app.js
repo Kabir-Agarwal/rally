@@ -243,7 +243,17 @@ async function chooseName() {
         await api("/api/me/claim", { name, real_name });
         ME = await api("/api/me");
         ov.remove(); if (tc) tc.style.display = ""; resolve(true);
-      } catch (e) { err.textContent = e; }
+      } catch (e) {
+        // The claim can 409 ("you already have a player") when this account was already set up
+        // somewhere else — e.g. the old email flow signed you in inside the mail app's browser,
+        // you set up there, then came back here. That is not a failure: the player exists, so
+        // pick it up and carry on instead of trapping the user in this overlay forever.
+        try {
+          const me = await api("/api/me");
+          if (me && me.player_id) { ME = me; ov.remove(); if (tc) tc.style.display = ""; resolve(true); return; }
+        } catch (_) { }
+        err.textContent = e;
+      }
     };
     ov.querySelector("#nmReal").addEventListener("keydown", e => { if (e.key === "Enter") ov.querySelector("#nmGo").click(); });
   });

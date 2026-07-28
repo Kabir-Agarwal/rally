@@ -123,3 +123,95 @@ def test_court_picker_reads_accepted_friends_only(tmp_path):
     names = [p["name"] for p in c.get("/api/meta", headers=ha).json()["players"]]
     assert "Ann" in names and "Bob" in names       # self + accepted friend
     assert "Dan" not in names                        # pending is NOT in the picker
+
+
+# --- email OTP: which token TYPE a mailed code verifies as -------------------
+# The first external user's sign-in died here: a first-time email uses Supabase's "Confirm
+# signup" template, whose code verifies as type 'signup', but we only ever sent type 'email'.
+class _FakeHTTPError(Exception):
+    def __init__(self, payload):
+        self._payload = payload
+
+    def read(self):
+        import json
+        return json.dumps(self._payload).encode()
+
+
+def _fake_supabase(monkeypatch, accept_type=None, error_payload=None):
+    """Pretend to be Supabase /auth/v1/verify; record which types were attempted."""
+    import json as _json
+    import auth
+    monkeypatch.setattr(auth, "AUTH_MODE", "supabase")
+    monkeypatch.setattr(auth, "SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setattr(auth, "SUPABASE_ANON_KEY", "anon")
+    tried = []
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return _json.dumps({"access_token": "real-token"}).encode()
+
+    def fake_urlopen(req, timeout=None):
+        kind = _json.loads(req.data.decode())["type"]
+        tried.append(kind)
+        if accept_type and kind == accept_type:
+            return _Resp()
+        raise _FakeHTTPError(error_payload or {"msg": "Token has expired or is invalid"})
+
+    monkeypatch.setattr(auth.urllib.request, "urlopen", fake_urlopen)
+    return tried
+
+
+def test_signup_code_verifies_even_though_we_try_email_first(monkeypatch):
+    """A brand-new user's code is type 'signup'. It must still sign them in."""
+    import auth
+    tried = _fake_supabase(monkeypatch, accept_type="signup")
+    r = auth.verify_email_otp("new@user.com", "123456")
+    assert r.get("token") == "real-token", r
+    assert tried[0] == "email", "returning users are the common case, so try 'email' first"
+    assert "signup" in tried, "a first-time code must still be accepted"
+
+
+def test_returning_user_code_takes_the_first_try(monkeypatch):
+    import auth
+    tried = _fake_supabase(monkeypatch, accept_type="email")
+    assert auth.verify_email_otp("old@user.com", "123456").get("token") == "real-token"
+    assert tried == ["email"], "no wasted round trips once the first type works"
+
+
+def test_a_genuinely_bad_code_surfaces_supabase_reason(monkeypatch):
+    import auth
+    _fake_supabase(monkeypatch, error_payload={"msg": "Token has expired or is invalid"})
+    r = auth.verify_email_otp("x@y.com", "000000")
+    assert "token" not in r
+    assert "expired" in r["error"].lower(), f"expired and mistyped need different fixes: {r}"
+
+
+def test_player_follows_the_account_not_the_device(tmp_path):
+    """P2 ('details not saved'): a player row is keyed by the AUTH USER id, not the device.
+
+    So signing in from a different browser/phone with the same identity must land on the same
+    player, and must not be able to create a second one. This is what makes the old link-based
+    email flow merely confusing rather than destructive: the details were saved, just under a
+    session left behind in the mail app's browser.
+    """
+    from fastapi.testclient import TestClient
+    appmod, c = _fresh(tmp_path)
+    h = _hdr("email:sam@example.com")
+
+    assert c.get("/api/me", headers=h).json().get("needs_name") is True
+    c.post("/api/me/claim", json={"name": "Sam", "real_name": "Sam R"}, headers=h)
+
+    other_device = TestClient(appmod.app)                 # fresh browser, same identity
+    me = other_device.get("/api/me", headers=h).json()
+    assert me["player_name"] == "Sam"
+    assert me["player_real_name"] == "Sam R"
+    assert not me.get("needs_name"), "details must follow the account, not the device"
+
+    # ...and a second claim is refused rather than silently making a duplicate player
+    assert other_device.post("/api/me/claim", json={"name": "Sam2"}, headers=h).status_code == 409

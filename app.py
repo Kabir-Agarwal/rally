@@ -260,6 +260,7 @@ def leaderboard_rows(con, group_id, mode, me_pid=None):
         rows.append({"id": p["id"], "name": p["game_name"], "real_name": p["real_name"],
                      "code": p["code"], "rel": _rel_from_map(fmap, me_pid, p["id"]),
                      "rating": round(st[mode].get(p["id"], START)), "n": n,
+                     "created_at": p["created_at"],
                      "provisional": n < ratings.MIN_MATCHES, "live": bool(p["live"]), "group": None})
     return rows
 
@@ -268,7 +269,13 @@ def ranked_and_provisional(rows):
     ranked = sorted([r for r in rows if not r["provisional"]], key=lambda r: -r["rating"])
     for i, r in enumerate(ranked, 1):
         r["rank"] = i
-    prov = sorted([r for r in rows if r["provisional"]], key=lambda r: -r["rating"])
+    # Unranked players are almost all tied (nobody with 0 matches has a rating yet), so whatever
+    # breaks the tie IS their order. That used to fall through to the query's alphabetical order,
+    # which meant renaming yourself made you jump up or down the list for everyone — confusing,
+    # and reported by the first external user. Join order is stable: a rename cannot change it.
+    # `code` is unique, so the ordering is total and never depends on dict/query iteration luck.
+    prov = sorted([r for r in rows if r["provisional"]],
+                  key=lambda r: (-r["rating"], r.get("created_at") or "", r["code"]))
     return ranked, prov
 
 

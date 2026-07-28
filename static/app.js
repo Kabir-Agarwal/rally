@@ -44,12 +44,63 @@ function G(path) {
 
 // Fail-open helper: resolve to `fallback` if `p` takes longer than `ms` or rejects, so a
 // stalled network call can NEVER block the boot on the "Loading…" placeholder.
+// NOTE: one-shot. On the boot path prefer `resilient()` below — a single short deadline treats a
+// serverless cold start as a failure, which is exactly the bug this file used to have.
 function raceTimeout(p, ms, fallback) {
   return Promise.race([
     Promise.resolve(p).catch(() => fallback),
     new Promise(res => setTimeout(() => res(fallback), ms || 4000)),
   ]);
 }
+
+const sleep = (ms) => new Promise(res => setTimeout(res, ms));
+
+// ---------- retry: SLOW IS NOT BROKEN ----------
+// Sentinel meaning "every attempt was exhausted". Distinct from null/undefined, which a server
+// is allowed to return; only FAILED means "we could not reach the server at all".
+const FAILED = { __rallyFailed: true };
+
+// `make` must be a FUNCTION, not a promise — each attempt has to issue a NEW request. (The old
+// code raced an already-started promise, so a "retry" could only ever re-await the same stall.)
+function attempt(make, ms) {
+  let timer = null;
+  return Promise.race([
+    Promise.resolve().then(make),
+    new Promise((_, rej) => { timer = setTimeout(() => rej(new Error("timeout")), ms); }),
+  ]).then(v => { clearTimeout(timer); return v; }, e => { clearTimeout(timer); throw e; });
+}
+
+// The single place the network budget lives.
+// Rationale: a Vercel cold start costs ~1.5s before any of our code runs, mobile radios add
+// hundreds of ms of wake-up + RTT, and the first request also pays token verification. A 4-6s
+// one-shot deadline routinely lost that race on a phone's FIRST load — which is precisely why the
+// app showed "Rally couldn't start" on first open and worked on reload (warm function).
+const NET = { tries: 3, ms: 12000, backoff: [700, 2000] };
+window.NET = NET;                    // exposed so test_boot.cjs can shrink the budget
+
+// Retry with backoff and a GENEROUS per-attempt deadline before ever calling something broken.
+async function resilient(make, opts) {
+  const o = opts || {};
+  const tries = o.tries || NET.tries;
+  const ms = o.ms || NET.ms;                      // per attempt, not total
+  const backoff = o.backoff || NET.backoff;
+  for (let i = 0; i < tries; i++) {
+    try {
+      const v = await attempt(make, ms);
+      if (o.onProgress) { try { o.onProgress(); } catch (e) { } }
+      return v;
+    } catch (e) {
+      if (i < tries - 1) {
+        if (o.onRetry) { try { o.onRetry(i + 1, tries); } catch (e2) { } }
+        await sleep(backoff[Math.min(i, backoff.length - 1)]);
+      }
+    }
+  }
+  return FAILED;
+}
+// True when `v` is a real answer rather than the FAILED sentinel. (A function declaration, not a
+// const arrow, so the Node boot tests can reach it on the sandbox global.)
+function ok(v) { return v !== FAILED; }
 
 // joined-groups memory (device-local); identity is server-side (player_links)
 const LS = {
@@ -70,6 +121,7 @@ function updateChip(s) {
 function enqueue(url, body) { return queue ? queue.push({ url, body }) : api(url, body); }
 
 let ME = { signed_in: false, player_id: null, player_name: null, email: null };
+function currentMe() { return ME; }   // accessor so the Node boot tests can inspect identity
 
 // ---------- auth gate + identity ----------
 function showSignInGate() {
@@ -80,14 +132,67 @@ function showSignInGate() {
   document.querySelector(".app").appendChild(gate);
   Auth.renderSignIn(gate, () => location.reload());
 }
-// Header shows the active group filter, or "All groups" when unfiltered.
+// Header = WHO you are (left) + WHAT you're looking at (right).
+// Left: game name with real name underneath, tappable to edit both (openNameEditor).
+// Right: the group filter chip — the active group, or "All groups" when unfiltered.
 function setHeaderName() {
-  const nm = document.getElementById("hdName");
-  const sub = document.getElementById("hdSub");
-  if (nm) nm.textContent = window.FILTER && window.GROUP ? window.GROUP.name : "All groups";
-  if (sub) sub.innerHTML = window.FILTER && window.GROUP
-    ? "code <b>" + esc(window.GROUP.code) + "</b> · " + (window.GROUP.is_public ? "public" : "private")
-    : "tennis scorer";
+  const game = document.getElementById("hdGame");
+  const real = document.getElementById("hdReal");
+  if (game) game.textContent = ME.player_name || "Rally";
+  // Before identity resolves there is no name to show, so keep the subtitle rather than a gap.
+  if (real) real.textContent = ME.player_name ? (ME.player_real_name || "") : "tennis scorer";
+  const f = document.getElementById("hdFilterName");
+  if (f) f.textContent = filterLabel();
+}
+
+// Tap the header name -> edit game name AND real name in one sheet. Same endpoint the Groups tab
+// uses (/api/me/rename), so both places stay in agreement.
+function openNameEditor() {
+  if (!ME.player_id) return;                    // nothing to rename yet (not signed in / no player)
+  closeNameEditor();
+  const sh = el(`<div class="psheet" id="nameSheet" onclick="if(event.target.id=='nameSheet')closeNameEditor()">
+    <div class="psheet-body card">
+      <div style="font-weight:800;font-size:16px;margin-bottom:10px">Your name</div>
+      <label class="fieldlab">Game name (what everyone sees)</label>
+      <input id="hdGameField" maxlength="24" autocomplete="off" value="${esc(ME.player_name || "")}">
+      <label class="fieldlab" style="margin-top:8px">Real name (optional)</label>
+      <input id="hdRealField" maxlength="40" autocomplete="off" value="${esc(ME.player_real_name || "")}">
+      <div class="err" id="hdNameErr"></div>
+      <div class="row" style="margin-top:10px;gap:8px">
+        <button class="btn sm ghost" style="flex:1" onclick="closeNameEditor()">Cancel</button>
+        <button class="btn sm clay" style="flex:1" id="hdNameSave" onclick="saveHeaderName()">Save</button>
+      </div></div></div>`);
+  document.body.appendChild(sh);
+  const g = document.getElementById("hdGameField");
+  if (g) { g.focus(); g.addEventListener("keydown", e => { if (e.key === "Enter") saveHeaderName(); }); }
+  const r = document.getElementById("hdRealField");
+  if (r) r.addEventListener("keydown", e => { if (e.key === "Enter") saveHeaderName(); });
+}
+function closeNameEditor() {
+  const s = document.getElementById("nameSheet");
+  if (s && s.parentNode) s.parentNode.removeChild(s);
+}
+async function saveHeaderName() {
+  const err = document.getElementById("hdNameErr");
+  if (err) err.textContent = "";
+  const name = (document.getElementById("hdGameField") || {}).value;
+  const real_name = (document.getElementById("hdRealField") || {}).value;
+  if (!name || !name.trim()) { if (err) err.textContent = "game name is required"; return; }
+  const btn = document.getElementById("hdNameSave");
+  if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }     // no double-submit
+  try {
+    await api("/api/me/rename", { name: name.trim(), real_name });
+    const me = await resilient(() => api("/api/me"), { tries: 2 });
+    if (ok(me)) ME = me;
+    else { ME.player_name = name.trim(); ME.player_real_name = (real_name || "").trim(); }
+    setHeaderName();
+    closeNameEditor();
+    toast("Name updated");
+    renderTab(CURRENT_TAB || "live");           // names appear all over the current tab
+  } catch (e) {
+    if (err) err.textContent = String(e);
+    if (btn) { btn.disabled = false; btn.textContent = "Save"; }
+  }
 }
 
 // No group gate any more: signed in -> full app; signed out -> sign-in screen.
@@ -99,7 +204,13 @@ async function authGate() {
 }
 
 async function ensureIdentity() {
-  ME = await raceTimeout(api("/api/me"), 4000, { signed_in: false, player_id: null });
+  // A slow /api/me used to resolve to a FABRICATED {signed_in:false} after 4s — the app then
+  // believed a signed-in user was signed out (no "you" card, pending joins dropped). Retry, and
+  // if the server is genuinely unreachable leave ME untouched rather than inventing an answer.
+  const r = await resilient(() => api("/api/me"), { onRetry: bootSlowNote });
+  if (!ok(r)) return true;                        // unreachable: say nothing about identity
+  ME = r;
+  bootStep("identity");
   if (ME.signed_in && !ME.player_id) return await chooseName();   // first sign-in: pick a name
   return true;
 }
@@ -219,11 +330,25 @@ function broadcastCard(m) {
 }
 
 // ================= LIVE =================
+// A poller's FIRST load is patient (retries; a cold start must not look like a failure). Later
+// refreshes are quick, and on failure they keep the data already on screen instead of wiping it —
+// a dropped poll is not a reason to replace good data with an error.
+let LIVE_LOADED = false;
 function initLive() {
+  LIVE_LOADED = false;
   poll(async () => {
-    const d = await raceTimeout(api(G("/live")), 6000, null);   // never leave "Loading…" on a stall/error
+    const first = !LIVE_LOADED;
+    const d = await resilient(() => api(G("/live")),
+      first ? { onRetry: bootSlowNote } : { tries: 1 });
     const host = document.getElementById("liveMatches"); if (!host) return;
-    if (!d) { host.innerHTML = `<div class="empty">Couldn't load live matches — will retry.</div>`; return; }
+    if (!ok(d)) {
+      if (LIVE_LOADED) return;                                  // keep what's rendered
+      host.innerHTML = `<div class="empty">Couldn't load live matches — <a href="#" onclick="initLive();return false">retry</a></div>`;
+      return;
+    }
+    LIVE_LOADED = true;
+    bootStep("live");
+    _clearSlowNote();
     host.innerHTML = "";
     if (!d.matches.length) host.appendChild(el(`<div class="empty">No live matches. Start one in Log.</div>`));
     d.matches.forEach(m => host.appendChild(broadcastCard(m)));
@@ -245,13 +370,18 @@ function setRankOpt(kind, val, btn) {
   RANK[kind] = val; loadRanks();
 }
 async function loadRanks() {
-  const d = await raceTimeout(api(G("/leaderboard?mode=" + RANK.mode)), 6000, null);
-  if (!d) {                                     // never sit on "Loading…": show an error + retry
+  const first = !RANK.data;
+  const d = await resilient(() => api(G("/leaderboard?mode=" + RANK.mode)),
+    first ? { onRetry: bootSlowNote } : { tries: 1 });
+  if (!ok(d)) {
+    if (RANK.data) return;                      // a dropped refresh must not wipe the board
     const host = document.getElementById("rankList");
     if (host) host.innerHTML = `<div class="empty">Couldn't load ranks — <a href="#" onclick="loadRanks();return false">retry</a></div>`;
     return;
   }
   RANK.data = d;
+  bootStep("ranks");
+  _clearSlowNote();
   renderRanks();
 }
 // relationship of ME to a player, in plain words (server sends r.rel: you/friend/sent/incoming/none)
@@ -259,48 +389,55 @@ function relLabel(rel) {
   return rel === "you" ? "you" : rel === "friend" ? "friend"
     : (rel === "sent" || rel === "incoming") ? "requested" : "not a friend";
 }
+// ONE row shape for the whole board. An under-5-matches player is the SAME row, greyed, with
+// "N of 5" where a rank number would be — no separate provisional section.
 function rankRow(r, mePid) {
   const you = r.id == mePid;
   const dot = r.live ? '<span class="dot pulse"></span>' : '<span class="dotspace"></span>';
   const tag = r.group ? `<span class="tag">${esc(r.group)}</span>` : "";
   const rating = dispFromEloRow(r);
   const v = r.rating - 1200;
-  const cls = v > 0 ? "pos" : v < 0 ? "neg" : "zero";
-  return `<div class="lbrow ${you ? 'you' : ''}" onclick="openPlayerSheet('${r.id}')">
-    <div class="rk">${r.rank || '–'}</div>${av(r.name)}
-    <div class="nm">${dot}${pBlock(r)}${tag}${you ? ' <span class="youpill">YOU</span>' : ''}<div class="tapstats">${relLabel(r.rel)}</div></div>
-    <div class="rt ${cls}">${rating}</div></div>`;
+  const cls = r.provisional ? "" : (v > 0 ? "pos" : v < 0 ? "neg" : "zero");
+  const sub = r.provisional
+    ? `${relLabel(r.rel)} · unranked until 5 matches`
+    : relLabel(r.rel);
+  return `<div class="lbrow ${you ? 'you' : ''} ${r.provisional ? 'prov' : ''}" onclick="openPlayerSheet('${r.id}')">
+    <div class="rk">${r.provisional ? '–' : r.rank}</div>${av(r.name)}
+    <div class="nm">${dot}${pBlock(r)}${tag}${you ? ' <span class="youpill">YOU</span>' : ''}<div class="tapstats">${esc(sub)}</div></div>
+    <div class="rt ${cls}">${rating}${r.provisional ? ` <span class="pill">${r.n} of 5</span>` : ''}</div></div>`;
 }
 const dispFromEloRow = (r) => { const v = r.rating - 1200; return (v > 0 ? "+" : "") + v; };
+// The board as ONE ordered list. Server sends `rows`; fall back to the older ranked+provisional
+// pair so a stale cached payload still renders.
+function allRankRows() {
+  const d = RANK.data;
+  if (!d) return [];
+  return d.rows || (d.ranked || []).concat(d.provisional || []);
+}
 function renderRanks() {
   if (!RANK.data) return;
   const sl = document.getElementById("rankScopeLine");
   if (sl) sl.textContent = (RANK.mode === "doubles" ? "Doubles" : "Singles") + " · " + filterLabel();
   const q = (document.getElementById("rankSearch").value || "").toLowerCase();
-  const filt = a => a.filter(r => r.name.toLowerCase().includes(q));
-  const ranked = filt(RANK.data.ranked), prov = filt(RANK.data.provisional);
+  const all = allRankRows();
+  const shown = all.filter(r => r.name.toLowerCase().includes(q));
   const yc = document.getElementById("youCard"); yc.innerHTML = "";
   if (ME.player_id) {
-    const you = RANK.data.ranked.find(r => r.id == ME.player_id);
+    const you = all.find(r => r.id == ME.player_id);
     if (you) yc.appendChild(el(`<div class="youcard" onclick="openPlayer('${you.id}')">${av(you.name)}
       <div style="flex:1">${pBlock(you)} <span class="youpill">YOU</span></div>
-      <div>#${you.rank} · <b>${dispFromEloRow(you)}</b></div></div>`));
+      <div>${you.provisional ? `${you.n} of 5` : "#" + you.rank} · <b>${dispFromEloRow(you)}</b></div></div>`));
   }
-  document.getElementById("rankList").innerHTML = ranked.length ? ranked.map(r => rankRow(r, ME.player_id)).join("") : `<div class="empty">No ranked players yet.</div>`;
-  const provWrap = document.getElementById("provWrap");
-  provWrap.innerHTML = prov.length
-    ? `<div class="sec-title">Minimum 5 matches</div><div class="card" style="padding:2px 2px">` +
-      prov.map(r => `<div class="lbrow" onclick="openPlayerSheet('${r.id}')"><div class="rk">–</div>${av(r.name)}
-        <div class="nm">${r.live ? '<span class="dot pulse"></span>' : '<span class="dotspace"></span>'}${pBlock(r)}${r.group ? `<span class="tag">${esc(r.group)}</span>` : ''}<div class="tapstats">${relLabel(r.rel)}</div></div>
-        <div class="rt">${dispFromEloRow(r)} <span class="pill">${r.n} of 5</span></div></div>`).join("") + `</div>`
-    : "";
+  // ONE list. Under-5 players are greyed rows inside it, not a section of their own.
+  document.getElementById("rankList").innerHTML = shown.length
+    ? shown.map(r => rankRow(r, ME.player_id)).join("")
+    : `<div class="empty">${all.length ? "No players match that search." : "No players yet."}</div>`;
 }
 function initRanks() { loadRanks(); poll(async () => { await loadRanks(); }, 5000); }
 
 // ---- Ranks bottom sheet: Name#CODE, rating + matches, See stats, Add friend (state = reality) ----
 function _rankById(pid) {
-  const d = RANK.data; if (!d) return null;
-  return (d.ranked || []).concat(d.provisional || []).find(r => r.id == pid) || null;
+  return allRankRows().find(r => r.id == pid) || null;
 }
 function openPlayerSheet(pid) {
   const r = _rankById(pid);
@@ -632,10 +769,12 @@ async function loadHistory() {
   const sl = document.getElementById("histScopeLine");
   if (sl) sl.textContent = "· " + HIST_KIND_LABELS[HIST.kind] + " · " + filterLabel();
   const host = document.getElementById("historyList");
-  // Never sit on "Loading…": bound the fetch and always land on data OR an error state.
-  const d = await raceTimeout(api(G("/history")), 6000, null);
+  // Never sit on "Loading…", but retry first — a cold start is not an error state.
+  const d = await resilient(() => api(G("/history")), { onRetry: bootSlowNote });
   if (!host) return;
-  if (!d) { host.innerHTML = `<div class="empty">Couldn't load history — <a href="#" onclick="loadHistory();return false">retry</a></div>`; return; }
+  if (!ok(d)) { host.innerHTML = `<div class="empty">Couldn't load history — <a href="#" onclick="loadHistory();return false">retry</a></div>`; return; }
+  bootStep("history");
+  _clearSlowNote();
   host.innerHTML = "";
   try {
     let matches = d.matches || [];
@@ -754,8 +893,7 @@ const TAB_SKELETONS = {
       <button class="funnelbtn" onclick="openFunnel('ranks')">▼</button></div>
     <div id="rankScopeLine" class="scopeline"></div>
     <div id="youCard"></div>
-    <div id="rankList" class="card" style="padding:2px 2px"><div class="empty">Loading…</div></div>
-    <div id="provWrap"></div>`,
+    <div id="rankList" class="card" style="padding:2px 2px"><div class="empty">Loading…</div></div>`,
   log: `<div id="logRoot"><div class="empty">Loading…</div></div>`,
   groups: `<div class="sec-title">You</div><div id="youCardG"></div>
     <div class="sec-title">Add someone</div><div id="addSomeone"></div>
@@ -840,19 +978,23 @@ window.addEventListener("popstate", () => {
 // clears the stale token. A timeout/error does NOT nuke a possibly-valid token — the boot just
 // fails open to the sign-in view. Bounded by raceTimeout so it can't hang.
 function _fetchMe() {
-  return raceTimeout(
-    fetch("/api/auth/me", { headers: Auth.headers() }).then(r => (r.ok ? r.json() : null)).catch(() => null),
-    4000, null);
+  // Retries, so a slow answer is never mistaken for "couldn't tell". Only a DEFINITIVE
+  // signed_in:false may sign the user out, and that can only come from a real server reply.
+  return resilient(
+    () => fetch("/api/auth/me", { headers: Auth.headers() }).then(r => (r.ok ? r.json() : null)),
+    { onRetry: bootSlowNote }).then(v => (ok(v) ? v : null));
 }
 async function staleTokenGuard() {
   if (!(window.Auth && Auth.signedIn())) return;
   let me = await _fetchMe();
+  bootStep("token-guard");
   if (!(me && me.signed_in === false)) return;          // valid, or couldn't tell (fail open)
   // Server rejected the token. If a refresh token exists, try ONCE to renew (Task 3: sessions
-  // shouldn't die every hour) and re-check before giving up.
+  // shouldn't die every hour) and re-check before giving up. Renewal is a round trip to Supabase,
+  // so it gets a real budget too — a slow renewal is not a failed renewal.
   if (Auth.refreshToken && Auth.refreshToken()) {
-    const refreshed = await raceTimeout(Auth.refreshSession(), 5000, false);
-    if (refreshed) { me = await _fetchMe(); if (!(me && me.signed_in === false)) return; }
+    const refreshed = await resilient(() => Auth.refreshSession(), { tries: 2 });
+    if (ok(refreshed) && refreshed) { me = await _fetchMe(); if (!(me && me.signed_in === false)) return; }
   }
   // Definitively rejected. If this token was captured during THIS sign-in attempt, say why
   // instead of silently bouncing back to the card (Task 2). A plain expired token stays silent.
@@ -874,6 +1016,57 @@ function failOpen() {
     try { showSignInGate(); } catch (e) { _errorCard(document.getElementById("tabContent")); }
   } else {
     _errorCard(document.getElementById("tabContent"));
+  }
+}
+
+// ---------- boot watchdog ----------
+// The old backstop was `setTimeout(failOpen, 4500)`: a blind wall-clock deadline that fired even
+// while boot was making perfectly good progress. On a phone's first load (cold serverless start +
+// mobile RTT) it fired essentially every time, which IS the "Rally couldn't start" card the user
+// saw — and a reload worked because the function was then warm. Worse, Auth.config()'s own retry
+// budget (3 x 10s) could never finish inside 4.5s, so that fix could never actually take effect.
+//
+// The replacement watches PROGRESS, not the clock: it only gives up if boot has reached no new
+// milestone for BOOT.stallMs, or has been going for BOOT.maxMs overall. Slow is not broken.
+const BOOT = {
+  stallMs: 25000,      // no milestone reached for this long => genuinely stuck
+  maxMs: 75000,        // absolute ceiling, so boot can never hang forever
+  slowNoteMs: 5000,    // after this, TELL the user it's slow (NOT that it failed)
+  tickMs: 1000,        // how often the watchdog looks at progress
+};
+window.BOOT = BOOT;               // exposed so test_boot.cjs can shrink the thresholds
+let BOOT_T0 = 0, BOOT_MARK = 0, BOOT_DONE = false, BOOT_WD = null, BOOT_NOTED = false;
+
+function bootStep(label) { BOOT_MARK = Date.now(); }   // label kept for debugging/readability
+
+// An honest "still working" state. NOT an error.
+// It is appended as its OWN node and never writes into #tabContent: that container holds the tab
+// PANELS, and overwriting its innerHTML detached the already-rendered panel (PANELS still cached
+// the orphan, so renderTab would not rebuild it) and left the app blank on a slow connection.
+function bootSlowNote() {
+  if (BOOT_DONE || BOOT_NOTED) return;
+  if (Date.now() - BOOT_T0 < BOOT.slowNoteMs) return;
+  if (document.getElementById("bootSlow")) return;
+  const host = document.querySelector(".app") || document.body;
+  if (!host) return;
+  BOOT_NOTED = true;
+  host.appendChild(el(`<div class="card" id="bootSlow" style="text-align:center">
+    <div style="font-weight:800">Starting Rally…</div>
+    <div class="muted" style="margin-top:6px">slow connection — still trying</div></div>`));
+}
+function _clearSlowNote() {
+  const n = document.getElementById("bootSlow");
+  if (n && n.parentNode) n.parentNode.removeChild(n);
+  BOOT_NOTED = false;
+}
+function bootWatchdog() {
+  if (BOOT_DONE) return;
+  const now = Date.now();
+  if (now - BOOT_T0 > BOOT.slowNoteMs) bootSlowNote();
+  if (now - BOOT_MARK > BOOT.stallMs || now - BOOT_T0 > BOOT.maxMs) {
+    BOOT_DONE = true;
+    clearInterval(BOOT_WD);
+    failOpen();
   }
 }
 // /?join=CODE deep link. Persist the code IMMEDIATELY (before any sign-in redirect that would
@@ -902,15 +1095,21 @@ async function boot() {
   storePendingJoin();
   await staleTokenGuard();
   if (!(await authGate())) return;         // signed out -> sign-in screen (join code kept for after)
+  bootStep("auth-gate");
   let initTab = (window.INIT && TAB_URL[window.INIT.tab]) ? window.INIT.tab : "live";
   if (new URLSearchParams(location.search).get("add")) initTab = "groups";   // /?add=CODE -> Add someone
   // Render what we have NOW: paint the tab immediately (its data fetch fires right away) and resolve
   // identity IN PARALLEL, instead of blocking first paint on a second sequential token-verify.
-  const idP = raceTimeout(ensureIdentity(), 10000, true);
+  // ensureIdentity() is already internally bounded + retrying, so it is NOT wrapped in a deadline
+  // here — wrapping it was a second "slow == broken" trap (10s and identity was silently dropped).
+  const idP = ensureIdentity().catch(() => true);
+  _clearSlowNote();
   renderTab(initTab);
   setActiveNav(initTab);
+  bootStep("first-paint");
   if (window.INIT && window.INIT.player) openPlayerNoPush(window.INIT.player);
   await idP;                               // a new user needs a name -> chooseName shows (tab already up)
+  setHeaderName();                         // the header shows ME, so it can only fill in once ME is known
   if (ME.player_id && CURRENT_TAB === "leaderboard") renderTab("leaderboard");  // fill the "you" card once known
   if (ME.player_id) await completePendingJoin();   // /?join=CODE, now that we have a signed-in player
 }
@@ -918,16 +1117,22 @@ let _booted = false;
 function startBoot() {
   if (_booted) return;                    // run exactly once, whichever trigger fires first
   _booted = true;
-  // Hard backstop: whatever happens, the placeholder is gone within ~4.5s.
-  const backstop = setTimeout(failOpen, 4500);
-  boot().then(() => clearTimeout(backstop)).catch(() => { clearTimeout(backstop); failOpen(); });
+  BOOT_T0 = BOOT_MARK = Date.now();
+  // Progress-aware watchdog instead of a blind deadline (see bootWatchdog). It only declares
+  // failure if boot genuinely stops advancing; a slow network just gets a "still trying" note.
+  BOOT_WD = setInterval(bootWatchdog, BOOT.tickMs);
+  const finish = () => { BOOT_DONE = true; clearInterval(BOOT_WD); _clearSlowNote(); };
+  boot().then(finish).catch(() => { finish(); failOpen(); });   // a thrown error IS broken
 }
 // Belt-and-suspenders: this script may run before OR after DOMContentLoaded, and in some
 // embedded browsers the event doesn't reach a late-added listener. Trigger from every angle;
 // the once-guard makes sure boot runs a single time.
-if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", startBoot);
-window.addEventListener("load", startBoot);
-setTimeout(startBoot, 0);
+// RALLY_NO_AUTOBOOT lets test_boot.cjs drive startBoot() itself instead of racing these timers.
+if (!window.RALLY_NO_AUTOBOOT) {
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", startBoot);
+  window.addEventListener("load", startBoot);
+  setTimeout(startBoot, 0);
+}
 
 // ---------- landing ----------
 function initLanding() {
@@ -935,7 +1140,7 @@ function initLanding() {
   if (!(window.Auth && Auth.signedIn())) { Auth.renderSignIn(host, () => location.reload()); return; }
   renderLanding(host);                                  // render immediately — never block on a fetch
   if (!Auth.email()) {                                  // fill email in the background (after Google OAuth)
-    raceTimeout(Auth.refreshEmail(), 4000, null).then(() => { if (Auth.email()) renderLanding(host); });
+    resilient(() => Auth.refreshEmail(), { tries: 2 }).then(() => { if (Auth.email()) renderLanding(host); });
   }
 }
 // Landing is group-agnostic (no per-group player yet), so its YOU card shows the signed-in

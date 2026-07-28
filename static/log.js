@@ -42,9 +42,14 @@ async function initLog(isRefresh) {
   loadEditor();
   poll(loadEditor, 4000);   // tracked poller — cleared when leaving the Log tab
 }
+// initLog() awaits this FIRST, so an unbounded/one-shot /meta could stop the whole Log tab from
+// ever rendering (a throw here used to reject initLog before any DOM was built). Retry, and on
+// total failure keep whatever roster we already had and let the tab render anyway.
 async function refreshMeta() {
-  const meta = await api(G("/meta"));
+  const meta = await resilient(() => api(G("/meta")), { tries: 3 });
+  if (!ok(meta)) return false;
   PLAYERS = meta.players; PAIRS = meta.pairs; PAIRPROV = meta.pair_provisional;
+  return true;
 }
 function setKind(kind, btn) {
   NEW = { kind, slots: new Array(needSlots(kind)).fill(null), firstServe: null };
@@ -161,11 +166,21 @@ async function startMatch() {
 }
 
 // ---- live editor ----
+let EDITOR_LOADED = false;
 async function loadEditor() {
   const host = document.getElementById("liveEditor");
-  const d = await raceTimeout(api(G("/live")), 6000, null);   // never hang on a stalled/erroring feed
+  // Retry before calling it broken (cold start != failure), and once the editor is up a dropped
+  // 4s refresh must not tear it down under the scorer's thumb.
+  const first = !EDITOR_LOADED;
+  const d = await resilient(() => api(G("/live")),
+    first ? { tries: 3 } : { tries: 1 });
   if (!host) return;
-  if (!d) { host.innerHTML = `<div class="empty">Couldn't load the live match — <a href="#" onclick="loadEditor();return false">retry</a></div>`; updateStartBtn(); return; }
+  if (!ok(d)) {
+    if (EDITOR_LOADED) { updateStartBtn(); return; }          // keep the live editor on screen
+    host.innerHTML = `<div class="empty">Couldn't load the live match — <a href="#" onclick="loadEditor();return false">retry</a></div>`;
+    updateStartBtn(); return;
+  }
+  EDITOR_LOADED = true;
   const m = d.matches[0];
   if (!m) { EDIT = null; host.innerHTML = `<div class="empty">No live match yet.</div>`; updateStartBtn(); return; }
   if (EDIT && EDIT.mid === m.id) { updateStartBtn(); return; }

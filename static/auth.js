@@ -162,9 +162,16 @@ window.Auth = (function () {
   }
 
   async function renderSignIn(host, onDone) {
-    host.innerHTML = SHELL('<div class="muted" style="text-align:center">…</div>');
+    // config() retries for up to ~32s. Say so honestly while it works instead of showing a bare
+    // "…" that reads as a hang — and never show an error until the retries are actually spent.
+    host.innerHTML = SHELL('<div class="muted" style="text-align:center" id="auWait">Connecting…</div>');
+    var slow = setTimeout(function () {
+      var w = host.querySelector("#auWait");
+      if (w) w.textContent = "Connecting… slow connection, still trying";
+    }, 4000);
     var fl = failLine();
     var cfg = await config();
+    clearTimeout(slow);
     if (cfg.mode === "error") {                 // couldn't reach the server -> retry, never a dead button
       _retryCard(host, onDone, "Couldn't reach the server — retry");
       return;

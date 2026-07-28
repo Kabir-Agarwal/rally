@@ -54,7 +54,75 @@ def _verify_mock(token: str):
         return None
 
 
+# --- verification cache (PERF) --------------------------------------------
+# MEASURED: /auth/v1/user is a ~0.6s network round trip, and it ran on EVERY authenticated
+# request (/api/me, /api/live, /api/leaderboard, every write). With Live polling every 3s that
+# is 0.6s of pure latency per poll. Cache only CONFIRMED verifications, briefly.
+#
+# What this does NOT weaken:
+#   * A token is only ever cached AFTER Supabase itself confirmed it. Failures are never
+#     cached, so a forged/garbage/unknown token still hits Supabase every single time.
+#   * Expiry is enforced independently on every cache hit, from the token's own `exp`.
+#     An expired token fails the moment it expires, even mid-TTL — see _unverified_exp.
+#   * The cache is per-process (a serverless instance), so it dies with the instance.
+# The one real, bounded cost: a token REVOKED server-side (remote sign-out) keeps working for
+# at most AUTH_VERIFY_TTL seconds after its last confirmation. 60s against Supabase's own ~1h
+# access-token lifetime. Set AUTH_VERIFY_TTL=0 to disable the cache entirely.
+_VERIFY_TTL = int(os.environ.get("AUTH_VERIFY_TTL") or 60)
+_VERIFY_MAX = 512                      # hard cap so a long-lived instance can't grow unbounded
+_verify_cache: dict[str, tuple[float, int, dict]] = {}   # key -> (confirmed_at, exp, claims)
+
+
+def _cache_key(token: str) -> str:
+    """Never key the cache on the raw token — hash it so tokens aren't held in a dict."""
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _unverified_exp(token: str) -> int:
+    """The `exp` claim read WITHOUT signature verification.
+
+    Safe *only* because of how it is used: it can make a cached entry expire EARLIER, never
+    later, and never admits a token. A token whose signature we have not confirmed cannot
+    reach the cache at all, so a forged `exp` buys an attacker nothing. 0 = no readable exp,
+    which we treat as "cannot vouch for expiry" -> the entry is not reusable.
+    """
+    try:
+        payload = json.loads(_ub64(token.split(".")[1]))
+        return int(payload.get("exp") or 0)
+    except Exception:
+        return 0
+
+
+def _cache_get(token: str):
+    if _VERIFY_TTL <= 0:
+        return None
+    hit = _verify_cache.get(_cache_key(token))
+    if not hit:
+        return None
+    confirmed_at, exp, claims = hit
+    now = time.time()
+    # Both must hold: the confirmation is still fresh AND the token has not expired.
+    if now - confirmed_at < _VERIFY_TTL and exp > now:
+        return claims
+    _verify_cache.pop(_cache_key(token), None)
+    return None
+
+
+def _cache_put(token: str, claims: dict) -> None:
+    if _VERIFY_TTL <= 0:
+        return
+    exp = _unverified_exp(token)
+    if exp <= time.time():
+        return                          # no usable exp -> don't cache; always re-verify
+    if len(_verify_cache) >= _VERIFY_MAX:
+        _verify_cache.clear()           # crude but bounded; this is a latency cache, not state
+    _verify_cache[_cache_key(token)] = (time.time(), exp, claims)
+
+
 def _verify_supabase(token: str):
+    cached = _cache_get(token)
+    if cached is not None:
+        return cached
     req = urllib.request.Request(
         f"{SUPABASE_URL}/auth/v1/user",
         headers={"Authorization": f"Bearer {token}", "apikey": SUPABASE_ANON_KEY},
@@ -65,9 +133,14 @@ def _verify_supabase(token: str):
             meta = u.get("user_metadata") or {}
             # real name from the provider profile (Google), for pre-filling the real-name field
             name = meta.get("full_name") or meta.get("name")
-            return {"sub": u["id"], "email": u.get("email"), "name": name}
+            claims = {"sub": u["id"], "email": u.get("email"), "name": name}
     except Exception:
+        # A rejection is NEVER cached, and it evicts any earlier confirmation for this token —
+        # so a revoked token stops working as soon as one request sees the rejection.
+        _verify_cache.pop(_cache_key(token), None)
         return None
+    _cache_put(token, claims)
+    return claims
 
 
 def verify_token(token: str | None):

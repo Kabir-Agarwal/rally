@@ -10,9 +10,16 @@
 <body>
 <div class="app">
   <div class="hd">
-    {# Group switcher lives here as a FILTER (top-left, next to the name). No group = "All groups". #}
-    <div class="name" onclick="openSwitcher()">🎾 <span id="hdName">All groups</span> <span class="chev">▾</span></div>
-    <div class="sub" id="hdSub">tennis scorer</div>
+    {# WHO you are, top-left: game name + real name, tap to edit both.
+       WHICH groups you're looking at, top-right: the filter chip (no group = "All groups"). #}
+    <div class="hd-row">
+      <div class="hd-me" id="hdMe" onclick="openNameEditor()">
+        <div class="hd-game"><span id="hdGame">Rally</span> <span class="hd-pen">✎</span></div>
+        <div class="hd-real" id="hdReal">tennis scorer</div>
+      </div>
+      <button class="gchip" id="hdFilter" onclick="openSwitcher()">
+        <span class="gname" id="hdFilterName">All groups</span><span class="chev">▾</span></button>
+    </div>
     <div class="court-line"></div>
   </div>
 

@@ -446,6 +446,16 @@ def friendship(con, x, y):
     return con.execute("SELECT * FROM friendships WHERE a_id=? AND b_id=?", (a, b)).fetchone()
 
 
+def friend_map(con, pid):
+    """Every friendship row involving `pid`, keyed by the OTHER player's id. ONE query.
+
+    PERF: the leaderboard used to call friendship() once per listed player — on the unfiltered
+    board that is one Postgres round trip per player in the whole app. Same answer, O(1) queries.
+    """
+    rows = con.execute("SELECT * FROM friendships WHERE a_id=? OR b_id=?", (pid, pid)).fetchall()
+    return {(r["b_id"] if r["a_id"] == pid else r["a_id"]): r for r in rows}
+
+
 def request_friend(con, requester, other):
     if requester == other:
         raise ValueError("cannot friend yourself")

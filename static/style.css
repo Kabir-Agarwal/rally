@@ -26,6 +26,20 @@ a{color:inherit;text-decoration:none}
 .hd .name{font-size:20px;font-weight:800;display:flex;align-items:center;gap:8px;cursor:pointer}
 .hd .name .chev{opacity:.8;font-size:14px}
 .hd .sub{font-size:12px;opacity:.85;margin-top:2px}
+/* Header: identity top-LEFT (game name + real name, tappable), group filter chip top-RIGHT.
+   Both sides ellipsis rather than wrap, so a long name can never push the chip off screen. */
+.hd .hd-row{display:flex;align-items:flex-start;gap:10px}
+.hd-me{flex:1 1 auto;min-width:0;cursor:pointer}
+.hd-game{font-size:20px;font-weight:800;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hd-real{font-size:12px;opacity:.85;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hd-pen{font-size:12px;opacity:.7;font-weight:400}
+.gchip{flex:0 1 auto;max-width:50%;min-width:0;display:flex;align-items:center;gap:5px;
+  background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.45);color:#fff;
+  border-radius:20px;padding:6px 11px;font-family:inherit;font-size:12px;font-weight:700;
+  cursor:pointer;margin-top:2px}
+.gchip .gname{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gchip .chev{opacity:.85;font-size:10px;flex:0 0 auto}
+.gchip:active{transform:translateY(1px)}
 .court-line{height:2px;background:rgba(255,255,255,.5);margin-top:10px;border-radius:2px}
 
 /* tab bar */
@@ -97,6 +111,11 @@ input,select{font:inherit;padding:11px 12px;border:1.5px solid var(--line);borde
 .lbrow .nm{flex:1;font-weight:700}
 .lbrow .rt{font-weight:800}
 .lbrow.you{background:rgba(214,237,23,.18);border-radius:10px}
+/* Under 5 matches: same row, greyed INLINE in the one list (no separate section). Kept fully
+   tappable and readable — dimmed, not hidden. */
+.lbrow.prov{opacity:.55}
+.lbrow.prov .rt{color:var(--muted)}
+.lbrow.prov.you{opacity:.8}
 .youcard{margin:12px 16px;background:var(--clay);color:#fff;border-radius:14px;padding:12px 14px;
   display:flex;align-items:center;gap:10px}
 .youpill{background:var(--yellow);color:#20260a;font-size:10px;font-weight:800;padding:2px 8px;border-radius:20px}
@@ -150,7 +169,10 @@ input,select{font:inherit;padding:11px 12px;border:1.5px solid var(--line);borde
 
 /* player bottom sheet (Ranks) + toast — reuse card/btn styles, no tab restyle */
 .psheet{position:fixed;inset:0;background:rgba(43,33,28,.45);z-index:60;display:flex;align-items:flex-end;justify-content:center}
-.psheet .psheet-body{width:100%;max-width:412px;margin:0;border-radius:16px 16px 0 0;animation:sheetup .18s ease}
+/* Bottom sheet sits flush with the viewport bottom, so its own padding has to clear the fixed tab
+   bar — otherwise the sheet's action buttons land on top of the tab labels. */
+.psheet .psheet-body{width:100%;max-width:412px;margin:0;border-radius:16px 16px 0 0;
+  padding-bottom:calc(72px + env(safe-area-inset-bottom, 0px));animation:sheetup .18s ease}
 @keyframes sheetup{from{transform:translateY(30px);opacity:.6}to{transform:none;opacity:1}}
 .toast{position:fixed;left:50%;bottom:74px;transform:translateX(-50%) translateY(20px);background:var(--ink);color:#fff;
   padding:10px 16px;border-radius:12px;font-size:13px;font-weight:700;z-index:80;opacity:0;pointer-events:none;

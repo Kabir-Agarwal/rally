@@ -209,18 +209,27 @@ def _pblock(p):
     return {"id": p["id"], "name": p["game_name"], "real_name": p["real_name"], "code": p["code"]}
 
 
-def _relationship(con, me_pid, other_id):
-    """ME's standing relationship to a player: you / friend / sent / incoming / none."""
+def _rel_from_map(fmap, me_pid, other_id):
+    """ME's standing relationship to a player: you / friend / sent / incoming / none.
+    Reads a prefetched friend_map instead of querying per player (see db.friend_map)."""
     if me_pid and me_pid == other_id:
         return "you"
     if not me_pid:
         return "none"
-    f = db.friendship(con, me_pid, other_id)
+    f = fmap.get(other_id)
     if not f:
         return "none"
     if f["status"] == "accepted":
         return "friend"
     return "sent" if f["requested_by"] == me_pid else "incoming"
+
+
+def _relationship(con, me_pid, other_id):
+    """Single-player form of _rel_from_map (one query). Use the map form for lists."""
+    if not me_pid or me_pid == other_id:
+        return _rel_from_map({}, me_pid, other_id)
+    f = db.friendship(con, me_pid, other_id)
+    return _rel_from_map({other_id: f} if f else {}, me_pid, other_id)
 
 
 def leaderboard_rows(con, group_id, mode, me_pid=None):
@@ -230,11 +239,13 @@ def leaderboard_rows(con, group_id, mode, me_pid=None):
         players = db.members_of(con, group_id)
     else:
         players = con.execute("SELECT * FROM players ORDER BY LOWER(game_name)").fetchall()
+    # One friendships query for the whole board, not one per row.
+    fmap = db.friend_map(con, me_pid) if me_pid else {}
     rows = []
     for p in players:
         n = st[mode + "_n"].get(p["id"], 0)
         rows.append({"id": p["id"], "name": p["game_name"], "real_name": p["real_name"],
-                     "code": p["code"], "rel": _relationship(con, me_pid, p["id"]),
+                     "code": p["code"], "rel": _rel_from_map(fmap, me_pid, p["id"]),
                      "rating": round(st[mode].get(p["id"], START)), "n": n,
                      "provisional": n < ratings.MIN_MATCHES, "live": p["id"] in live_ids, "group": None})
     return rows
@@ -246,6 +257,15 @@ def ranked_and_provisional(rows):
         r["rank"] = i
     prov = sorted([r for r in rows if r["provisional"]], key=lambda r: -r["rating"])
     return ranked, prov
+
+
+def leaderboard_payload(rows, gid, mode):
+    """ONE list, in display order: ranked players (5+ matches, numbered) then under-5 players
+    (unnumbered, greyed inline by the client). `ranked`/`provisional` are kept as views of the
+    same rows so nothing that reads them breaks — but `rows` is the list the UI renders."""
+    ranked, prov = ranked_and_provisional(rows)
+    return {"rows": ranked + prov, "ranked": ranked, "provisional": prov,
+            "scope": "group" if gid else "everyone", "mode": mode}
 
 
 # --- auth endpoints -------------------------------------------------------
@@ -454,7 +474,10 @@ def api_live(request: Request):
         rows = con.execute(q, tuple([p["id"]] + gids)).fetchall()
     else:
         rows = []
-    st = db.rating_state(con, gid)
+    # rating_state scans every counted match and rebuilds the whole rating table. It is only
+    # needed for win_prob on a live card, so with nothing live it was pure wasted latency —
+    # and "nothing live" is the common case on every Live poll.
+    st = db.rating_state(con, gid) if rows else None
     mine = []
     for m in rows:
         mv = match_view(con, m)
@@ -500,9 +523,9 @@ def api_leaderboard(request: Request, mode: str = "singles"):
     con = get_con()
     gid = _gid_from_query(con, request)
     u, p = me_player(con, request)
-    ranked, prov = ranked_and_provisional(leaderboard_rows(con, gid, mode, p["id"] if p else None))
+    rows = leaderboard_rows(con, gid, mode, p["id"] if p else None)
     con.close()
-    return {"ranked": ranked, "provisional": prov, "scope": "group" if gid else "everyone", "mode": mode}
+    return leaderboard_payload(rows, gid, mode)
 
 
 @app.get("/api/history")

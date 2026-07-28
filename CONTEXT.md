@@ -1,6 +1,118 @@
 # CONTEXT.md — Rally (tennis scorer)
 
-## Ranks add-friend + group join-link + create-dup fix (2026-07-27) — deployed (latest)
+## Boot speed + header + Ranks (2026-07-28) — built & tested, **NOT DEPLOYED** (latest)
+Branch `claude/rally-boot-header-ranks-d9n93p`, on top of master `6acc531` (verified: nothing had
+landed after it). 116 Python + 18 Node boot checks green. Browser-verified with Playwright,
+including an A/B against master. **Deploy is blocked:** no `VERCEL_TOKEN` in this environment —
+see "Deploy — BLOCKED" below. Nothing in this section is live yet.
+
+- **Task 1 — boot resilience (the "Rally couldn't start" on first load).** REAL cause found:
+  `startBoot()` armed a blind `setTimeout(failOpen, 4500)` wall-clock backstop that fired even
+  while boot was progressing normally, and every boot fetch was a ONE-SHOT 4–6s race. A Vercel
+  cold start (~1.5s before any of our code runs) + mobile RTT + the then-per-request token
+  verification lost that race on a phone's first load; a reload won because the function was warm.
+  The same 4.5s deadline also made the earlier `Auth.config()` retry fix (3 × 10s = up to 32s)
+  *unreachable* — it could never finish before `failOpen` fired.
+  - `resilient(make, opts)` + a single `NET` budget (3 attempts × 12s, backoff). `make` is a
+    FUNCTION so each attempt issues a NEW request — re-awaiting one stalled promise can't recover.
+    `FAILED` is a distinct sentinel, so "server said null" ≠ "couldn't reach the server".
+  - The backstop is now a PROGRESS watchdog (`BOOT` config): it gives up only after `stallMs`
+    (25s) with no milestone or `maxMs` (75s) total. Slow gets an honest "Starting Rally… slow
+    connection" note; the failure card is reserved for a boot that throws or genuinely stalls.
+  - **Audited the whole boot path for the same "slow == broken" class** (the sign-in mock-fallback
+    bug was this class) and fixed every instance:
+    * `ensureIdentity()` fabricated `{signed_in:false}` after 4s — a signed-in user then read as
+      signed OUT (no "you" card, `/?join=` codes dropped). Now retries; if the server is truly
+      unreachable it leaves `ME` untouched instead of inventing an answer, and never forces the
+      "Set up your player" gate off a guess.
+    * `staleTokenGuard()`/`_fetchMe()` and `Auth.refreshSession()` retry; only a DEFINITIVE
+      `signed_in:false` from a real reply may sign anyone out.
+    * `initLive`/`loadRanks`/`loadHistory`/`loadEditor`: patient on first load; a dropped *poll*
+      refresh now KEEPS the data on screen instead of replacing it with an error.
+    * `log.js refreshMeta()` was unbounded AND awaited first in `initLog`, so a stalled
+      `/api/meta` could stop the Log tab rendering at all. Bounded, retried, non-fatal.
+    * Sign-in card shows "Connecting…" → "slow connection, still trying" instead of a bare "…".
+  - A/B **measured** (Playwright, latency injected on every `/api/`): at 5s/request master shows
+    "Rally couldn't start" at 4689ms; this branch renders real content at 10122ms. With 3 API
+    calls failing then recovering, master lands on "Couldn't load live matches"; this branch
+    renders real content at 2888ms. At 2s/request both work — master by ~400ms, which is why the
+    bug looked intermittent on fast wifi and constant on a phone.
+
+- **Task 2 — per-request latency. MEASURED, not guessed** (production, warm, near-empty DB;
+  medians of 6, `perf_probe.py` reproduces it). Baseline: `/static/style.css` 0.24s ·
+  `/api/auth/config` (python, no DB, no auth) 0.24s · `/api/me` 0.42s · `/api/live` 1.03–1.09s ·
+  `/api/leaderboard` 1.41s. Adding a bearer token to `/api/me`: 0.42s → **1.01s**.
+  So the fixed overhead was two things, and neither was slow SQL:
+  - **~0.6s per authenticated request: `auth._verify_supabase()` called
+    `{SUPABASE_URL}/auth/v1/user` on EVERY request** (blocking `urllib`), including every 3s Live
+    poll. Now cached per process for `AUTH_VERIFY_TTL` (default 60s, env-tunable; `0` disables).
+    End-to-end demo against a stub Supabase at the measured 0.6s: 6 authenticated requests =
+    **1** verification (0.608s then 0.002s ×5) vs **6** × 0.605s with the cache off.
+    **Auth is NOT weakened** — pinned by 9 tests in `test_authcache.py`:
+    only Supabase-CONFIRMED tokens are cached; rejections are NEVER cached and evict any earlier
+    confirmation; the token's own `exp` is enforced on every cache hit, so an expired token fails
+    mid-TTL; a token with no readable `exp` is never cached; the cache is bounded (512) and
+    per-instance. The one real, bounded cost: a token revoked server-side keeps working for **at
+    most 60s** after its last confirmation. (Local JWT verification would be faster still but
+    would never detect revocation at all, and we don't hold the JWT secret.)
+  - **Sequential Postgres round trips.** `leaderboard_rows()` called `friendship()` once per
+    listed player — on the UNFILTERED board that is one round trip per player in the whole app.
+    Replaced by one `db.friend_map()` query: **10 → 5** round trips, now constant in player count
+    (`test_query_budget.py` adds 40 players and asserts the count doesn't move). `/api/live`:
+    **4 → 3** — it no longer rebuilds every rating when nothing is live (that scan only feeds
+    `win_prob`, so it was pure waste on the common empty poll).
+  - Deliberately NOT changed: `pool_pre_ping=True` costs a round trip per request but guards
+    against stale pooled connections in a serverless + Supabase-pooler setup; correctness wins.
+    `rating_state()`/`match_view()` still do per-match queries — invisible at today's data volume
+    (0 counted matches) and therefore NOT what the measurement pointed at, but they are the next
+    cliff as matches accumulate.
+
+- **Task 3 — header.** Game name (bold) + real name underneath, **top-left**, tappable → one
+  sheet editing BOTH via the existing `/api/me/rename`; the group filter chip moved **top-right**
+  (still opens the existing switcher). Both sides ellipsis, so a long name can't push the chip
+  off screen. The old header's "code X · public/private" subtitle is gone — that lives on the
+  group cards in Groups and on the switcher rows.
+
+- **Task 4 — Ranks is ONE list.** Server ships `rows` in display order (ranked first, then
+  under-5); `ranked`/`provisional` remain as views so nothing reading them breaks. Under-5
+  players are greyed rows INLINE (`.lbrow.prov`, opacity .55) with "N of 5" where the rank number
+  would be, plus "unranked until 5 matches". The separate "Minimum 5 matches" section is deleted.
+  Still fully tappable (verified: a greyed row opens the player sheet).
+
+- **Bug I introduced and fixed during Task 1:** the slow-connection note wrote `innerHTML` into
+  `#tabContent`, which holds the tab PANELS — that detached the rendered panel while `PANELS`
+  kept the orphan, so `renderTab` wouldn't rebuild it and the app went BLANK on a slow
+  connection. Caught by the 5s-latency browser test, not by unit tests. It is now appended as its
+  own node; regression test added (`test_boot.cjs` #16b).
+- Also: `.psheet` action buttons no longer sit on top of the fixed tab bar (pre-existing; the new
+  name editor inherited it).
+
+- **New tests:** `test_authcache.py` (9, auth-cache security), `test_query_budget.py` (4, DB
+  round-trip budget + N+1 regression), `test_ranks_list.py` (3, one-list payload), and
+  `test_boot.cjs` grew to 18 checks (retry recovery, progress-aware watchdog, the shipped budget
+  itself, slow-note non-destructiveness). `test_boot.cjs` runs in ~3s: `static/app.js` exposes
+  `window.NET`/`window.BOOT` so tests can shrink the budget, and `window.RALLY_NO_AUTOBOOT` stops
+  app.js's own `setTimeout(startBoot, 0)` from racing the tests.
+
+- **Deploy — BLOCKED (not done).** `deploy.py` needs `VERCEL_TOKEN`; it is not in this
+  environment (checked env, `~/.vercel`, git config, repo). The Vercel MCP *is* authenticated and
+  can see project `rally-scorer` (`prj_OoilZUL1M8PaKeJhpJ5Ue8ZTxUlH`, team
+  `team_0zE1g36I2GS0ssWZe00gnSkK`), but its `deploy_to_vercel` requires the whole file tree inline
+  in one call (~444KB base64 for the runtime set), which is not practical. **To ship:**
+  `VERCEL_TOKEN=... python deploy.py`. Current production is still `dpl_1AJQ8EkguHXcuLtGqGjgWeYZb5sV`
+  (master `6acc531`), which is a rollback candidate. After deploying, run
+  `python perf_probe.py` and compare against the baseline numbers above — and read the caveat in
+  that file's docstring: it measures the COST of one verification (rejections are never cached),
+  not the improvement; for the improvement, time two consecutive `/api/me` calls with a real
+  signed-in token.
+
+- **NOT verified by me (needs his phones / a deploy):** anything on real hardware or through real
+  Supabase OAuth — the actual first-load-on-a-phone fix, real Google sign-in, `navigator.share`,
+  and the production latency after-numbers. All boot latency evidence here comes from injected
+  latency in headless Chromium against a local server, and all auth-cache evidence from a stub
+  Supabase; the live per-request numbers above are real measurements of the CURRENT production.
+
+## Ranks add-friend + group join-link + create-dup fix (2026-07-27) — deployed
 100 Python + 3 Node green. Browser-verified in mock mode (one session, seeded players).
 - **Task 1 — group-create "duplicate" (REAL cause).** NOT an optimistic double-insert. `createGroup`
   wrote a persistent "✔ created / share this code" card into `#justCreated` AND `renderGroupRows`

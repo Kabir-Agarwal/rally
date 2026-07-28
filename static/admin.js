@@ -197,6 +197,13 @@ async function adminCreateGroup() {
   if (!name) return;
   await guard(() => adminApi("/admin/api/group/create", { name }), "createErr");
 }
+// Clears players.password_hash so the player can set a new one after signing in with Google.
+async function adminResetPassword() {
+  const pid = document.getElementById("resetPid").value.trim();
+  if (!pid) return;
+  await guard(() => adminApi(`/admin/api/player/${pid}/reset-password`, {}), "resetErr");
+  document.getElementById("resetPid").value = "";
+}
 const grpRename = (gid) => guard(() => adminApi(`/admin/api/group/${gid}/rename`, { name: document.getElementById("rn" + gid).value }), "gerr" + gid);
 const grpPublic = (gid, val) => guard(() => adminApi(`/admin/api/group/${gid}/public`, { is_public: val }), "gerr" + gid);
 const grpRegen = (gid) => guard(() => adminApi(`/admin/api/group/${gid}/regen`, {}), "gerr" + gid);

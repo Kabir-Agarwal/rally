@@ -14,6 +14,7 @@ players = Table(
     Column("game_name", Text, nullable=False),
     Column("real_name", Text),
     Column("created_at", Text, nullable=False),
+    Column("password_hash", Text),
 )
 
 groups = Table(

@@ -161,6 +161,15 @@ function openNameEditor() {
       <div class="row" style="margin-top:10px;gap:8px">
         <button class="btn sm ghost" style="flex:1" onclick="closeNameEditor()">Cancel</button>
         <button class="btn sm clay" style="flex:1" id="hdNameSave" onclick="saveHeaderName()">Save</button>
+      </div>
+      <div style="border-top:1px solid rgba(0,0,0,.08);margin-top:14px;padding-top:12px">
+        <div style="font-weight:800;font-size:14px">Password sign-in</div>
+        <div class="muted" style="margin:2px 0 8px">Optional. Lets you sign in with
+          <b>${esc(ME.code || "your player ID")}</b> + a password instead of Google.</div>
+        <input id="hdPwField" type="password" maxlength="72" autocomplete="new-password"
+               placeholder="New password (min 8 characters)">
+        <div class="err" id="hdPwErr"></div>
+        <button class="btn sm" style="margin-top:8px" id="hdPwSave" onclick="saveHeaderPassword()">Set password</button>
       </div></div></div>`);
   document.body.appendChild(sh);
   const g = document.getElementById("hdGameField");
@@ -171,6 +180,26 @@ function openNameEditor() {
 function closeNameEditor() {
   const s = document.getElementById("nameSheet");
   if (s && s.parentNode) s.parentNode.removeChild(s);
+}
+// Set a password for player-ID sign-in. The password is sent once, over HTTPS, and the server
+// keeps only a salted hash — it is never stored in the browser and never echoed back.
+async function saveHeaderPassword() {
+  const err = document.getElementById("hdPwErr");
+  const field = document.getElementById("hdPwField");
+  const btn = document.getElementById("hdPwSave");
+  if (err) err.textContent = "";
+  const pw = field ? field.value : "";
+  if (!pw || pw.length < 8) { if (err) err.textContent = "password must be at least 8 characters"; return; }
+  if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
+  try {
+    await api("/api/auth/set-password", { password: pw });
+    if (field) field.value = "";
+    toast("Password set — you can sign in with " + (ME.code || "your player ID"));
+    if (btn) { btn.disabled = false; btn.textContent = "Set password"; }
+  } catch (e) {
+    if (err) err.textContent = String(e);
+    if (btn) { btn.disabled = false; btn.textContent = "Set password"; }
+  }
 }
 async function saveHeaderName() {
   const err = document.getElementById("hdNameErr");

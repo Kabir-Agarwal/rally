@@ -363,7 +363,7 @@ async def api_set_password(request: Request):
         return JSONResponse({"error": "sign in first"}, 401)
     con = get_con()
     try:
-        status, body = auth_playerid.do_set_password(con, u["sub"], d.get("password") or "", auth.bearer(request))
+        status, body = auth_playerid.do_set_password(con, u["sub"], d.get("password") or "")
     finally:
         con.close()
     return JSONResponse(body, status)
@@ -1103,4 +1103,21 @@ async def admin_delete_match(mid: str, request: Request):
     con = get_con()
     logic.delete_match(con, mid)
     con.close()
+    return {"ok": True}
+
+
+@app.post("/admin/api/player/{pid}/reset-password")
+async def admin_reset_password(pid: str, request: Request):
+    """Password recovery. There is no reset email (email is gone), so recovery is: admin clears
+    the hash, the player signs in with Google — which always works and is the account's real
+    identity — and sets a new password from their profile."""
+    require_admin(request)
+    con = get_con()
+    try:
+        if not db.get_player(con, pid):
+            return JSONResponse({"error": "no such player"}, 404)
+        auth_playerid.clear_password(con, pid)
+        db.log_admin(con, "reset-password", pid)
+    finally:
+        con.close()
     return {"ok": True}

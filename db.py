@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS players (
   code TEXT UNIQUE NOT NULL,           -- permanent public player code (Name#CODE)
   game_name TEXT NOT NULL,
   real_name TEXT,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  password_hash TEXT                   -- salted scrypt digest, or NULL = no password set
 );
 CREATE TABLE IF NOT EXISTS groups (
   id TEXT PRIMARY KEY,
@@ -138,7 +139,7 @@ CREATE TABLE IF NOT EXISTS admin_log (
 """
 
 REQUIRED = {  # column presence the app depends on — checked loudly at startup (no silent patching)
-    "players": ("id", "code", "game_name", "real_name", "created_at"),
+    "players": ("id", "code", "game_name", "real_name", "created_at", "password_hash"),
     "matches": ("id", "group_id", "former_group_name", "kind", "status", "logger_id"),
     "match_players": ("match_id", "player_id", "side", "rotation_pos"),
     "groups": ("id", "name", "code", "is_public", "admin_id"),
@@ -444,6 +445,18 @@ def _pair(x, y):
 def friendship(con, x, y):
     a, b = _pair(x, y)
     return con.execute("SELECT * FROM friendships WHERE a_id=? AND b_id=?", (a, b)).fetchone()
+
+
+def player_by_code(con, code):
+    """Player for a PUBLIC player code, case-insensitively. Codes are printed as Name#CODE on the
+    leaderboard, so this is not a secret lookup — but it must never be joined to an email."""
+    return con.execute("SELECT * FROM players WHERE UPPER(code)=UPPER(?)", ((code or "").strip(),)).fetchone()
+
+
+def set_password_hash(con, pid, hashed):
+    """Store a salted digest, or None to clear it (admin reset -> 'no password set')."""
+    con.execute("UPDATE players SET password_hash=? WHERE id=?", (hashed, pid))
+    con.commit()
 
 
 def friend_map(con, pid):

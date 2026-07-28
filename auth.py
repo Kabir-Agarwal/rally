@@ -30,6 +30,67 @@ def _ub64(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
 
 
+# --- password hashing (stdlib only; no new dependency) ----------------------------------------
+# scrypt ships with hashlib and is memory-hard, so it needs no bcrypt/argon2 wheel in the Vercel
+# build. Parameters are stored IN the hash string, so they can be raised later without breaking
+# existing rows. Only ever a salted digest — the plaintext is never stored, returned or logged.
+_SCRYPT_N, _SCRYPT_R, _SCRYPT_P = 2 ** 14, 8, 1        # ~16 MB per verify
+
+
+def hash_password(password: str) -> str:
+    salt = secrets.token_bytes(16)
+    dk = hashlib.scrypt(password.encode(), salt=salt, n=_SCRYPT_N, r=_SCRYPT_R, p=_SCRYPT_P, dklen=32)
+    return f"scrypt${_SCRYPT_N}${_SCRYPT_R}${_SCRYPT_P}${_b64(salt)}${_b64(dk)}"
+
+
+def verify_password(password: str, stored: str | None) -> bool:
+    """Constant-time check. False for any malformed/absent hash — never raises."""
+    try:
+        algo, n, r, p, salt_b64, dk_b64 = (stored or "").split("$")
+        if algo != "scrypt":
+            return False
+        want = _ub64(dk_b64)
+        got = hashlib.scrypt(password.encode(), salt=_ub64(salt_b64),
+                             n=int(n), r=int(r), p=int(p), dklen=len(want))
+        return hmac.compare_digest(got, want)
+    except Exception:
+        return False
+
+
+# --- server-minted sessions (the player-ID + password path) -----------------------------------
+# Same HMAC-SHA256 envelope as the mock token, under a distinct `rally.` prefix so a production
+# session is never confused with a dev mock. verify_token() accepts it locally, with NO network
+# round trip — which is why it does not need (or use) the Supabase verification cache.
+#
+# SECURITY PROPERTIES, stated plainly:
+#   * The signing key is AUTH_SECRET (or ADMIN_KEY). Anyone holding that key can mint a session
+#     for ANY player. ADMIN_KEY is already god-mode, so this grants no new authority — but it
+#     does mean the key must be a real secret, set as an env var, never committed.
+#   * If neither variable is set we REFUSE to mint in Supabase mode, rather than silently signing
+#     with the built-in "dev-auth-secret" (which would let anyone forge any session). Fail closed.
+#   * The token is a bearer credential valid until `exp`. There is NO revocation list, so a
+#     stolen token works until it expires; hence the deliberately short 7-day TTL, versus the
+#     30-day mock token. Changing AUTH_SECRET invalidates every issued session at once.
+#   * It carries only {sub, email, exp}. `sub` is the player/auth uuid, so everything downstream
+#     (require_player, admin checks, group permissions) treats it exactly like a Google session.
+_SECRET_SOURCE = os.environ.get("AUTH_SECRET") or os.environ.get("ADMIN_KEY") or ""
+SESSION_TTL = 86400 * 7
+
+
+def can_mint_sessions() -> bool:
+    """False when we would be signing with the public dev default in a real deployment."""
+    return bool(_SECRET_SOURCE) or AUTH_MODE != "supabase"
+
+
+def mint_session(sub: str, email: str | None = None, ttl: int = SESSION_TTL) -> str:
+    if not can_mint_sessions():
+        raise RuntimeError("refusing to sign a session: set AUTH_SECRET (or ADMIN_KEY)")
+    payload = {"sub": sub, "email": email, "exp": int(time.time()) + ttl}
+    body = _b64(json.dumps(payload, separators=(",", ":")).encode())
+    sig = _b64(hmac.new(_SECRET, body.encode(), hashlib.sha256).digest())
+    return f"rally.{body}.{sig}"
+
+
 def mint_mock_token(sub: str, email: str, ttl: int = 86400 * 30) -> str:
     payload = {"sub": sub, "email": email, "exp": int(time.time()) + ttl}
     body = _b64(json.dumps(payload, separators=(",", ":")).encode())
@@ -144,8 +205,10 @@ def verify_token(token: str | None):
     """Return {sub, email} for a valid token, else None."""
     if not token:
         return None
-    if token.startswith("mock."):
-        return _verify_mock(token)          # mock tokens verify locally in either mode
+    if token.startswith("mock.") or token.startswith("rally."):
+        # Both are HMAC-signed by us and verify locally in either mode — no network, so these
+        # never touch the Supabase verification cache.
+        return _verify_mock(token)
     if AUTH_MODE == "supabase":
         return _verify_supabase(token)
     return None

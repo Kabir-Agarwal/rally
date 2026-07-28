@@ -1,6 +1,23 @@
 # CONTEXT.md — Rally (tennis scorer)
 
-## 2026-07-28-MERGE-AND-DEPLOY dispatch — merged & tested, deploy BLOCKED (latest)
+## 2026-07-28-DEPLOY-FROM-LAPTOP dispatch — still BLOCKED, no token on this machine either (latest)
+Ran from the laptop checkout. Task 1 done: local `master` was 3 behind; `git pull --ff-only` →
+HEAD `87f511f` (code `4717afa`), matching the dispatch exactly. **Task 2 STOPPED — no
+`VERCEL_TOKEN` here either.** The dispatch said it was in this repo's `.env`; it is not — `.env`
+contains only `ADMIN_KEY`. Also checked: shell env, `~/.vercel`, `~/.config`/`~/.local` and
+`%APPDATA%` Vercel CLI dirs, every `.env*` under `Desktop`/`projects`, and `git log -S` over all
+75 commits. The only two hits for the string `VERCEL_TOKEN` in the repo are `deploy.py` (which
+reads it from the environment only) and this file. No workaround attempted, per instruction.
+
+Tasks 3–4 therefore report BEFORE numbers, not after. Vercel API confirms newest production is
+still `dpl_1AJQ8EkguHXcuLtGqGjgWeYZb5sV` — no newer deployment exists, so the merged code is NOT
+live. `perf_probe.py` against production (medians, old bundle): `/api/live` **1.110s** vs the
+~0.85–0.95s projection, `/api/leaderboard` **1.508s** vs the ~1.05–1.45s projection — both above
+the projected range, as expected for un-deployed code, and consistent with the recorded baseline
+below (1.03–1.09s / 1.41s), which re-confirms production is unchanged. To finish:
+`VERCEL_TOKEN=... python deploy.py`, then re-run Tasks 3–4 for real after-numbers.
+
+## 2026-07-28-MERGE-AND-DEPLOY dispatch — merged & tested, deploy BLOCKED (earlier)
 Task 1 done: PR #1 (`claude/rally-boot-header-ranks-d9n93p`, base `6acc531`, clean/no conflicts
 per `mergeable_state` and a `git merge-tree` dry run) fast-forwarded into `master` and pushed —
 master is now `4717afa`, +1163/-83 as expected. Task 2 done: full suite green on merged master —

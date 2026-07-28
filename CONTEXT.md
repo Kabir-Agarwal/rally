@@ -1,6 +1,42 @@
 # CONTEXT.md — Rally (tennis scorer)
 
-## 2026-07-28 auto-deploy trigger — GIT CONNECTION NOT ACTIVE, still not deployed (latest)
+## DEPLOYING (read this first) — automatic on push to `master`
+**Git integration is live and verified (2026-07-28).** Vercel project `rally-scorer` is connected
+to `Kabir-Agarwal/rally`, production branch `master`. **To ship: push to `master`.** A production
+deployment is created within ~6s and is READY in ~20-25s.
+
+**`deploy.py` is LEGACY — do not use it.** It file-uploads a tree with a token and predates the
+git connection; it is kept only for reference. Nothing needs `VERCEL_TOKEN` any more, which is
+what blocked the two dispatches below.
+
+First auto-deploy verified end to end: commit `8000bce` → `dpl_8ryLUf7FmPgQqmhqw6k4ugiGEVLR`,
+`source: git`, `target: production`, READY (built 1785237917547 → ready 1785237938785, ~21s),
+aliased to rally-scorer.vercel.app. Live: HTTP 200 anonymously, renders the sign-in screen
+(Google/email, no guest Continue), **zero console messages/errors**. Served asset hash
+`c2da2ef4a3` — exactly the md5 of the static files at `8000bce` **as stored in git**, vs
+`22149a6e09` for old prod `6acc531`. So the merged work (`4717afa`) is finally LIVE.
+
+> Gotcha for anyone recomputing `ASSET_V` on Windows: `core.autocrlf=true` means the working tree
+> has CRLF while git (and therefore Vercel's Linux build) has LF, so hashing the working tree
+> gives a different value (`84dfd779e1`) than production serves. Hash the git blobs, not the
+> checkout.
+
+### AFTER numbers (production, post-deploy, medians of 6, two independent runs)
+| endpoint | before (old bundle) | after run 1 | after run 2 | projection | verdict |
+|---|---|---|---|---|---|
+| `/api/live` | 1.110s | **0.627s** | **0.536s** | ~0.85-0.95s | **beat it** |
+| `/api/leaderboard` | 1.508s | **1.497s** | **1.505s** | ~1.05-1.45s | **missed — no change** |
+
+`/api/live` came in well under projection. **`/api/leaderboard` did not improve at all** (1.508s →
+~1.50s) and sits above the projected range; both runs agree to within 8ms, so this is not noise.
+The leaderboard path still needs work — the boot/auth wins did not touch it.
+
+NOT MEASURED: two consecutive authenticated `/api/me` calls (the direct test of the verification
+cache). It needs a REAL signed-in Supabase session token; a bogus token is never cached, and
+signing in requires credentials. Closest available proxy is the probe's `delta` column — one
+verification round trip costs ~0.24-0.64s, which is what the cache avoids on repeat calls.
+
+## 2026-07-28 auto-deploy trigger — first attempt, git connection was not yet active (superseded)
 Tested the claim that `rally-scorer` is now git-connected (production branch `master`). It is
 not. Pushed empty commit `cb6a09e` ("trigger: first auto-deploy via git integration") at
 10:42:08Z; polled the Vercel API for 5 min (deadline 10:47:08Z) and past it. **Zero** production

@@ -1,6 +1,21 @@
 # CONTEXT.md — Rally (tennis scorer)
 
-## 2026-07-28-DEPLOY-FROM-LAPTOP dispatch — still BLOCKED, no token on this machine either (latest)
+## 2026-07-28 auto-deploy trigger — GIT CONNECTION NOT ACTIVE, still not deployed (latest)
+Tested the claim that `rally-scorer` is now git-connected (production branch `master`). It is
+not. Pushed empty commit `cb6a09e` ("trigger: first auto-deploy via git integration") at
+10:42:08Z; polled the Vercel API for 5 min (deadline 10:47:08Z) and past it. **Zero** production
+deployments created since `dpl_1AJQ8EkguHXcuLtGqGjgWeYZb5sV` — that is still `latestDeployment`,
+unchanged. Corroborating signals, all negative: repo has no webhooks, no GitHub Deployments, and
+no commit statuses/check-runs on `cb6a09e` (state `pending`, 0 total); and the Vercel project's
+own `updatedAt` (1785172356019) is ~17.5h OLDER than the push, i.e. the project config was never
+modified to add a git link.
+
+**So: deploys are NOT automatic on push. `deploy.py` is NOT legacy — it is still the only way to
+ship, and it still needs a `VERCEL_TOKEN` that is not in this environment** (see the entry
+below). Nothing about the deploy story has changed; the merged code (`4717afa`) is still not
+live. To actually enable auto-deploy: connect the repo under Vercel → project Settings → Git.
+
+## 2026-07-28-DEPLOY-FROM-LAPTOP dispatch — still BLOCKED, no token on this machine either (earlier)
 Ran from the laptop checkout. Task 1 done: local `master` was 3 behind; `git pull --ff-only` →
 HEAD `87f511f` (code `4717afa`), matching the dispatch exactly. **Task 2 STOPPED — no
 `VERCEL_TOKEN` here either.** The dispatch said it was in this repo's `.env`; it is not — `.env`

@@ -558,34 +558,68 @@ def set_status(con, mid, status):
 # --- rating rebuild (GLOBAL; optional group filter) -----------------------
 # A match counts toward ratings only when status='counted'. Ratings are global per player,
 # rebuilt from all counted matches (optionally restricted to one group).
-def _match_to_dict(con, m):
-    mid = m["id"]
-    s1, s2, rot = sides(con, mid)
-    if m["kind"] == "tt":
-        games = [g["winner_player_id"] for g in tt_games(con, mid)]
-        return {"kind": "tt", "rotation": rot, "games": games}
-    sets = [(s["games_side1"], s["games_side2"]) for s in match_sets(con, mid)]
-    d = {"kind": m["kind"], "side1": s1, "side2": s2, "sets": sets}
-    pts = con.execute(
-        "SELECT winner_side, COUNT(*) c FROM point_logs WHERE match_id=? GROUP BY winner_side", (mid,)
-    ).fetchall()
-    if pts:
-        by = {r["winner_side"]: r["c"] for r in pts}
-        d["points"] = (by.get(1, 0), by.get(2, 0))
-    return d
+def _rating_match_dicts(con, group_id=None):
+    """Every counted match as a ratings dict, in rebuild order, in a CONSTANT number of queries.
+
+    PERF: this used to be `[_match_to_dict(con, m) for m in ms]`, where _match_to_dict fired three
+    round trips PER MATCH (players, sets, point tally). On the unfiltered board that is
+    1 + 3*(every counted match in the app) — which is why /api/leaderboard sat at ~1.5s and did
+    NOT move when the auth/boot round trips were removed: the cost was never auth, it was this.
+    Each child table is now read in ONE query joined to the SAME predicate as the parent, so the
+    round-trip count no longer grows with the number of matches. Deliberately no IN(...) list, so
+    there is no bind-parameter ceiling to chunk around either.
+    """
+    where = "m.status='counted'" + (" AND m.group_id=?" if group_id else "")
+    args = (group_id,) if group_id else ()
+    ms = con.execute(
+        f"SELECT * FROM matches m WHERE {where} "
+        f"ORDER BY COALESCE(m.finished_at, m.created_at), m.id", args).fetchall()
+    if not ms:
+        return []
+
+    def by_match(table, order):
+        out = {}
+        for r in con.execute(
+                f"SELECT c.* FROM {table} c JOIN matches m ON m.id=c.match_id "
+                f"WHERE {where} ORDER BY {order}", args).fetchall():
+            out.setdefault(r["match_id"], []).append(r)
+        return out
+
+    # same ORDER BY as the old per-match sides()/match_sets()/tt_games(), so row order is unchanged
+    players = by_match("match_players", "c.match_id, c.side, c.rotation_pos, c.player_id")
+    sets = by_match("match_sets", "c.match_id, c.set_no")
+    games = by_match("tt_games", "c.match_id, c.game_no")
+    pts = {}
+    for r in con.execute(
+            f"SELECT c.match_id, c.winner_side, COUNT(*) n FROM point_logs c "
+            f"JOIN matches m ON m.id=c.match_id WHERE {where} "
+            f"GROUP BY c.match_id, c.winner_side", args).fetchall():
+        pts.setdefault(r["match_id"], {})[r["winner_side"]] = r["n"]
+
+    out = []
+    for m in ms:
+        mid = m["id"]
+        mps = players.get(mid, [])
+        rot = [r["player_id"] for r in sorted(
+            [r for r in mps if r["rotation_pos"]], key=lambda r: r["rotation_pos"])]
+        if m["kind"] == "tt":
+            out.append({"kind": "tt", "rotation": rot,
+                        "games": [g["winner_player_id"] for g in games.get(mid, [])]})
+            continue
+        d = {"kind": m["kind"],
+             "side1": [r["player_id"] for r in mps if r["side"] == 1],
+             "side2": [r["player_id"] for r in mps if r["side"] == 2],
+             "sets": [(s["games_side1"], s["games_side2"]) for s in sets.get(mid, [])]}
+        by = pts.get(mid)
+        if by:
+            d["points"] = (by.get(1, 0), by.get(2, 0))
+        out.append(d)
+    return out
 
 
 def rating_state(con, group_id=None):
     """Global rating state from counted matches. Pass group_id to restrict to one group."""
-    if group_id:
-        ms = con.execute(
-            "SELECT * FROM matches WHERE status='counted' AND group_id=? "
-            "ORDER BY COALESCE(finished_at, created_at), id", (group_id,)).fetchall()
-    else:
-        ms = con.execute(
-            "SELECT * FROM matches WHERE status='counted' "
-            "ORDER BY COALESCE(finished_at, created_at), id").fetchall()
-    return ratings.rebuild([_match_to_dict(con, m) for m in ms])
+    return ratings.rebuild(_rating_match_dicts(con, group_id))
 
 
 # --- admin log ------------------------------------------------------------

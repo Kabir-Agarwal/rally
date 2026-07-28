@@ -93,6 +93,48 @@ def test_leaderboard_query_count_does_not_grow_with_players(counted):
     assert many <= 6, f"leaderboard uses {many} round trips: {sql}"
 
 
+def _add_counted_matches(c, n, a, b):
+    """n finished, fully-approved (status='counted') singles matches between a and b."""
+    con = c.plain(c.tmp_path / "t.db")
+    logic = c.appmod.logic
+    for _ in range(n):
+        mid = logic.start_match(con, None, "singles", [a], [b], [], a)
+        logic.edit_sets(con, mid, [(6, 4)])
+        logic.finish_match(con, mid)
+        logic.approve(con, mid, a)
+        logic.approve(con, mid, b)
+    con.commit()
+    con.close()
+
+
+def test_leaderboard_query_count_does_not_grow_with_matches(counted):
+    """The N+1 that actually kept /api/leaderboard at ~1.5s.
+
+    The players axis was already covered above, so this one stayed invisible: rating_state()
+    replayed every counted match and fetched THAT match's players/sets/point tally one match at a
+    time — 3 round trips per counted match in the whole app. Guard the matches axis too.
+    """
+    c = counted
+    a, ha = signin(c, "a", "A")
+    b, hb = signin(c, "b", "B")
+
+    _add_counted_matches(c, 2, a, b)
+    few, _ = c.measure("/api/leaderboard?mode=singles", ha)
+    _add_counted_matches(c, 12, a, b)
+    many, sql = c.measure("/api/leaderboard?mode=singles", ha)
+
+    assert many == few, (
+        f"leaderboard round trips grew {few} -> {many} when 12 matches were added; "
+        f"queries: {collections.Counter(sql).most_common(5)}")
+    # Fixed budget, none of which scale with rows: 1 auth/me player + 5 for the rating rebuild
+    # (matches, match_players, match_sets, tt_games, point_logs) + live ids + the board's players
+    # + friendships. Was 1 + 3*(counted matches).
+    assert many <= 9, f"leaderboard uses {many} round trips: {sql}"
+    # sanity: those matches really are counted, so we measured the loaded path, not an empty one
+    rows = c.get("/api/leaderboard?mode=singles", headers=ha).json()["rows"]
+    assert any(r["n"] for r in rows), "no matches counted toward ratings — test measured nothing"
+
+
 def test_leaderboard_still_reports_relationships_correctly(counted):
     """The batched friend_map must give the SAME answers the per-row query gave."""
     c = counted

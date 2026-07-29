@@ -19,28 +19,63 @@ let LOG_BUILT = false;
 async function initLog(isRefresh) {
   await refreshMeta();
   if (LOG_BUILT && isRefresh) {          // tab re-entry: refresh without wiping picker/editor state
-    renderCourt(); loadEditor(); poll(loadEditor, 4000);
+    renderCourt(); applyLogMode(); loadEditor(); poll(loadEditor, 4000);
     return;
   }
   LOG_BUILT = true;
+  // The tab shows ONE thing at a time (T2): the creation form, or — once a match exists — that
+  // match's management view. Entering an old result is a separate full-screen job, not a third
+  // block stacked under both.
   document.getElementById("logRoot").innerHTML =
-    '<div class="sec-title">Start a live match</div>' +
-    '<div class="card">' +
-    '  <div class="seg" id="kindSeg">' +
-    '    <button class="on" onclick="setKind(\'singles\',this)">Singles</button>' +
-    '    <button onclick="setKind(\'doubles\',this)">Doubles</button>' +
-    '    <button onclick="setKind(\'tt\',this)">Triple threat</button></div>' +
-    '  <div id="courtWrap"></div><div id="chemRows"></div>' +
-    '  <div class="err" id="startErr"></div><div id="startMsg" class="note"></div>' +
-    '  <button class="btn" id="startBtn" style="margin-top:8px" onclick="startMatch()">▶ Start</button></div>' +
-    '<div class="sec-title">Update the live match</div>' +
-    '<div id="liveEditor"><div class="empty">No live match yet.</div></div>' +
-    '<div class="sec-title">Already played? Final score</div>' +
-    '<div class="card" id="playedCard"></div>';
+    '<div id="createWrap">' +
+    '  <div class="sec-title">Start a live match</div>' +
+    '  <div id="pickerHome">' +
+    '    <div class="card" id="pickerCard">' +
+    '      <div class="seg" id="kindSeg">' +
+    '        <button class="on" onclick="setKind(\'singles\',this)">Singles</button>' +
+    '        <button onclick="setKind(\'doubles\',this)">Doubles</button>' +
+    '        <button onclick="setKind(\'tt\',this)">Triple threat</button></div>' +
+    '      <div id="courtWrap"></div><div id="chemRows"></div></div></div>' +
+    '  <div class="card">' +
+    '    <div class="err" id="startErr"></div><div id="startMsg" class="note"></div>' +
+    '    <button class="btn" id="startBtn" onclick="startMatch()">▶ Start</button></div>' +
+    '  <div class="card"><button class="btn ghost" onclick="openPastMatchEntry()">🗓 Enter a past match</button></div>' +
+    '</div>' +
+    '<div id="liveWrap" style="display:none">' +
+    '  <div class="sec-title">Your live match</div>' +
+    '  <div id="liveEditor"><div class="empty">Loading…</div></div></div>';
   setKind(NEW.kind);
-  buildPlayed();
   loadEditor();
   poll(loadEditor, 4000);   // tracked poller — cleared when leaving the Log tab
+}
+
+// Creation form and management view are mutually exclusive. EDIT is set by hydrateEditor() when
+// a live match exists and cleared when none does, so this is driven by real server state, not by
+// what the user last tapped.
+function applyLogMode() {
+  const live = !!(EDIT && EDIT.mid);
+  const cw = document.getElementById("createWrap");
+  const lw = document.getElementById("liveWrap");
+  if (cw) cw.style.display = live ? "none" : "";
+  if (lw) lw.style.display = live ? "" : "none";
+}
+
+// "Enter a past match": its own full-screen section. It BORROWS the court picker DOM rather than
+// cloning it, so there is one #courtWrap, one NEW state, and no re-wiring — and puts it back on
+// close.
+function openPastMatchEntry() {
+  openFullSection("Enter a past match",
+    '<div class="sec-title">Who played</div><div id="pastPickerSlot"></div>' +
+    '<div class="sec-title">Final score</div><div class="card" id="playedCard"></div>',
+    () => {
+      const picker = document.getElementById("pickerCard");
+      const home = document.getElementById("pickerHome");
+      if (picker && home) home.appendChild(picker);
+    });
+  const picker = document.getElementById("pickerCard");
+  const slot = document.getElementById("pastPickerSlot");
+  if (picker && slot) slot.appendChild(picker);
+  buildPlayed();
 }
 // initLog() awaits this FIRST, so an unbounded/one-shot /meta could stop the whole Log tab from
 // ever rendering (a throw here used to reject initLog before any DOM was built). Retry, and on
@@ -160,7 +195,7 @@ async function startMatch() {
   if (anyLiveInGroup() || (EDIT && EDIT.mid)) { err.textContent = "A match is already live — finish it first"; return; }
   try {
     await api("/api/match/start", { ...startPayload(), group: window.FILTER || null });
-    document.getElementById("startMsg").innerHTML = '✔ Match started — score it in <b>Update the live match</b> just below';
+    document.getElementById("startMsg").textContent = "✔ Match started — scoring it below";
     setKind(NEW.kind); await refreshMeta(); renderCourt(); loadEditor();
   } catch (e) { err.textContent = e; }
 }
@@ -182,9 +217,9 @@ async function loadEditor() {
   }
   EDITOR_LOADED = true;
   const m = d.matches[0];
-  if (!m) { EDIT = null; host.innerHTML = `<div class="empty">No live match yet.</div>`; updateStartBtn(); return; }
-  if (EDIT && EDIT.mid === m.id) { updateStartBtn(); return; }
-  hydrateEditor(m); updateStartBtn();
+  if (!m) { EDIT = null; host.innerHTML = `<div class="empty">No live match yet.</div>`; updateStartBtn(); applyLogMode(); return; }
+  if (EDIT && EDIT.mid === m.id) { updateStartBtn(); applyLogMode(); return; }
+  hydrateEditor(m); updateStartBtn(); applyLogMode();
 }
 function hydrateEditor(m) {
   if (m.kind === "tt") {
@@ -313,11 +348,36 @@ function renderRotationConfirm(host, conf) {
 }
 function ttPickRotation() {
   const m = EDIT; const host = document.getElementById("ttButtons"); EDIT._pick = { server: null, receiver: null };
+  // T8: snapshot the order BEFORE offering to change it, so Cancel restores exactly what was on
+  // court rather than recomputing a "standard" rotation that may not match reality.
+  EDIT._prev = {
+    cur: EDIT.cur ? { server: EDIT.cur.server, receiver: EDIT.cur.receiver, sitter: EDIT.cur.sitter } : null,
+    rotKnown: EDIT.rotKnown,
+    pending: EDIT._pending || null,
+  };
   const opts = role => m.rot.map(id => `<button class="chip pickchip" onclick="ttPickSet('${role}','${id}',this)">${esc(m.names[id])}</button>`).join("");
   host.innerHTML = `<div class="muted">Who serves?</div><div class="chips">${opts('server')}</div>
     <div class="muted" style="margin-top:6px">Who receives?</div><div class="chips">${opts('receiver')}</div>
     <div class="note" id="pickSit">Sits out: (automatic)</div>
-    <button class="btn" id="pickConfirm" style="margin-top:6px" disabled onclick="ttApplyCustom()">Confirm</button>`;
+    <div class="row" style="margin-top:6px">
+      <button class="btn ghost" style="flex:1" onclick="ttCancelPick()">Cancel</button>
+      <button class="btn" id="pickConfirm" style="flex:1" disabled onclick="ttApplyCustom()">Confirm</button></div>`;
+}
+// Put the previous order back, byte for byte, and return to whatever was on screen before —
+// either the "is this the standard rotation?" prompt or the ordinary editor.
+function ttCancelPick() {
+  const prev = EDIT._prev || {};
+  if (prev.cur) EDIT.cur = { server: prev.cur.server, receiver: prev.cur.receiver, sitter: prev.cur.sitter };
+  EDIT.rotKnown = prev.rotKnown;
+  EDIT._pick = null;
+  EDIT._prev = null;
+  if (prev.pending) {
+    EDIT._pending = prev.pending;
+    renderRotationConfirm(document.getElementById("ttButtons"), prev.pending);
+  } else {
+    EDIT._pending = null;
+    renderTTEditor();
+  }
 }
 function ttPickSet(role, id, btn) {
   EDIT._pick[role] = id;

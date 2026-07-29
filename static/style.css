@@ -321,3 +321,24 @@ input,select{font:inherit;padding:11px 12px;border:1.5px solid var(--line);borde
 }
 .fullsec-title { font-weight: 800; font-size: 16px; }
 .fullsec-body { padding-bottom: 24px; }
+
+/* T7: "You won" — small, non-blocking, auto-dismissing. No overlay, no sound, nothing to tap. */
+.winpop {
+  position: fixed; left: 50%; bottom: 84px; transform: translate(-50%, 12px);
+  z-index: 80; pointer-events: none;
+  padding: 10px 18px; border-radius: 999px;
+  background: #2E7D4F; color: #fff; font-weight: 800; font-size: 15px;
+  box-shadow: 0 6px 20px rgba(0,0,0,.18);
+  opacity: 0; transition: opacity .25s ease, transform .25s ease;
+}
+.winpop.in { opacity: 1; transform: translate(-50%, 0); }
+
+/* T9: head-to-head cues. Tinted text on a wash of the same hue — readable, not christmas lights. */
+.wl-w { color: #2E7D4F; }
+.wl-l { color: #B3452F; }
+.wlchip {
+  display: inline-block; padding: 1px 7px; border-radius: 999px;
+  font-weight: 800; font-size: 12px;
+}
+.wlchip.wl-w { background: rgba(46,125,79,.12); }
+.wlchip.wl-l { background: rgba(179,69,47,.12); }

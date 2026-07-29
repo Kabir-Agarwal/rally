@@ -828,12 +828,13 @@ function storyLine(s) {
   if (s.longest_streak >= 4) bits.push(`${s.longest_streak}-pt run`);
   return bits.length ? `<div class="note">🎾 Live-scored · ${bits.join(" · ")}</div>` : "";
 }
-function initHistory() { renderProfileCard(); loadApprovals(); poll(loadApprovals, 15000); }
+function initHistory() { renderProfileCard(); loadApprovals(); }
 
 // ---------- full-screen sub-section (Past matches, Enter a past match) ----------
 // A tab should show ONE job. Anything secondary opens over the whole screen with a Back button
 // instead of stacking inline, which is what made the old Log/History tabs a wall on a phone.
-function openFullSection(title, bodyHtml) {
+let _fullSecClose = null;
+function openFullSection(title, bodyHtml, onClose) {
   closeFullSection();
   const ov = el(`<div class="fullsec" id="fullSec">
     <div class="fullsec-hd">
@@ -841,9 +842,17 @@ function openFullSection(title, bodyHtml) {
       <div class="fullsec-title">${esc(title)}</div></div>
     <div class="fullsec-body" id="fullSecBody">${bodyHtml}</div></div>`);
   document.body.appendChild(ov);
+  _fullSecClose = onClose || null;
   return ov.querySelector("#fullSecBody");
 }
-function closeFullSection() { const s = document.getElementById("fullSec"); if (s) s.remove(); }
+function closeFullSection() {
+  const s = document.getElementById("fullSec");
+  if (!s) return;
+  // onClose runs BEFORE removal so a caller can move borrowed DOM (e.g. the court picker) back
+  // where it came from instead of having it destroyed with the overlay.
+  if (_fullSecClose) { try { _fullSecClose(); } catch (e) { } _fullSecClose = null; }
+  s.remove();
+}
 
 function openPastMatches() {
   openFullSection("Past matches", `<div class="row" style="margin:12px 16px 0">
@@ -935,7 +944,41 @@ async function loadApprovals() {
   if (!ok(d)) return;                                  // a dropped refresh keeps what's rendered
   APPR.matches = d.matches || [];
   setApprBadge(d.count || 0);
+  checkWins(APPR.matches);
   renderApprovals();
+}
+
+// ---------- T7: "You won" popup ----------
+// Driven by the same finished-match feed as the badge, so it reaches every participant with the
+// app open, not just whoever happened to be scoring. Each match congratulates you at most once,
+// tracked in localStorage. The very first load seeds that list WITHOUT popping, so installing the
+// app doesn't replay every win you ever had.
+const WON_SEEN = "rally_congrats";
+function _seenWins() {
+  try { const v = localStorage.getItem(WON_SEEN); return v == null ? null : JSON.parse(v); }
+  catch (e) { return []; }
+}
+function _storeWins(ids) { try { localStorage.setItem(WON_SEEN, JSON.stringify(ids.slice(-60))); } catch (e) { } }
+function iWon(m) {
+  if (!m.winner_side || !ME.player_id) return false;        // TT has no winner_side — skipped
+  const side = m.winner_side === 1 ? m.side1 : m.side2;
+  return (side || []).some(p => p.id === ME.player_id);
+}
+function checkWins(matches) {
+  const finished = matches.filter(m => m.winner_side);
+  const ids = finished.map(m => m.id);
+  const seen = _seenWins();
+  if (seen === null) { _storeWins(ids); return; }           // first run: remember, don't celebrate
+  const fresh = finished.filter(m => !seen.includes(m.id) && iWon(m));
+  _storeWins(seen.concat(ids.filter(id => !seen.includes(id))));
+  if (fresh.length) showWinPopup();
+}
+function showWinPopup() {
+  const old = document.getElementById("winPop"); if (old) old.remove();
+  const pop = el(`<div class="winpop" id="winPop">You won 🎉</div>`);
+  document.body.appendChild(pop);
+  requestAnimationFrame(() => pop.classList.add("in"));
+  setTimeout(() => { pop.classList.remove("in"); setTimeout(() => pop.remove(), 400); }, 3200);
 }
 function setApprBadge(n) {
   const b = document.getElementById("apprBadge");
@@ -997,7 +1040,7 @@ function closePlayer(silent) {
 }
 function renderPlayer(ov, p) {
   const you = ME && ME.player_id === p.id;
-  const l5 = (p.last5 || []).map(r => `<b style="color:${r === 'W' ? 'var(--live)' : '#c0392b'}">${r}</b>`).join(" ");
+  const l5 = (p.last5 || []).map(r => `<b class="${r === 'W' ? 'wl-w' : 'wl-l'}">${r}</b>`).join(" ");
   const pairs = (p.pairs || []).map(pr =>
     `<div class="lbrow" style="cursor:default"><div class="nm">with ${esc(pr.partner)}</div>
       <div class="rt">${pr.rating - 1200 >= 0 ? '+' : ''}${pr.rating - 1200}</div>${pr.provisional ? `<span class="pill">${pr.n}/3</span>` : ''}</div>`).join("");
@@ -1016,7 +1059,8 @@ function renderPlayer(ov, p) {
       ${av(p.name).replace('avatar"', 'avatar" style="width:34px;height:34px;font-size:15px"')}
       <div class="pn"><div class="pn-game" style="font-size:20px">${esc(p.name)}${p.live ? '<span class="dot pulse"></span>' : ''}${you ? ' <span class="youpill">YOU</span>' : ''}</div>
         ${p.real_name ? `<div class="pn-real">${esc(p.real_name)}</div>` : ''}</div></div>
-      <div class="muted" style="margin-top:6px">${p.wins}W · ${p.losses}L · last 5: ${l5 || '—'}</div>
+      <div class="muted" style="margin-top:6px"><span class="wlchip wl-w">${p.wins}W</span>
+        <span class="wlchip wl-l">${p.losses}L</span> · last 5: ${l5 || '—'}</div>
       <div class="row" style="margin-top:10px">
         <div class="setcol"><div class="muted">Singles</div><div style="font-size:22px;font-weight:900">${p.singles - 1200 >= 0 ? '+' : ''}${p.singles - 1200}</div>${p.singles_prov ? `<span class="pill">${p.singles_n} of 5</span>` : ''}</div>
         <div class="setcol"><div class="muted">Doubles</div><div style="font-size:22px;font-weight:900">${p.doubles - 1200 >= 0 ? '+' : ''}${p.doubles - 1200}</div>${p.doubles_prov ? `<span class="pill">${p.doubles_n} of 5</span>` : ''}</div></div></div>
@@ -1262,6 +1306,16 @@ async function boot() {
   setHeaderName();                         // the header shows ME, so it can only fill in once ME is known
   if (ME.player_id && CURRENT_TAB === "leaderboard") renderTab("leaderboard");  // fill the "you" card once known
   if (ME.player_id) await completePendingJoin();   // /?join=CODE, now that we have a signed-in player
+  startApprovalsWatch();
+}
+// The approval badge sits on the Profile tab but has to be right from ANY tab, and the "You won"
+// popup should reach you wherever you are — so this poller is deliberately global and is NOT
+// registered with poll(), which clears on every tab switch.
+let _apprTimer = null;
+function startApprovalsWatch() {
+  if (_apprTimer || !ME.player_id) return;
+  loadApprovals();
+  _apprTimer = setInterval(() => { if (!document.hidden) loadApprovals(); }, 20000);
 }
 let _booted = false;
 function startBoot() {

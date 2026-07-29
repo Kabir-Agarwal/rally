@@ -389,7 +389,7 @@ function initLive() {
     bootStep("live");
     _clearSlowNote();
     host.innerHTML = "";
-    if (!d.matches.length) host.appendChild(el(`<div class="empty">No live matches. Start one in Log.</div>`));
+    if (!d.matches.length) host.appendChild(el(`<div class="empty">No live matches. Start one in Create Game.</div>`));
     d.matches.forEach(m => host.appendChild(broadcastCard(m)));
     const pub = document.getElementById("publicWrap");
     if (!d.public.length) { pub.innerHTML = ""; }   // empty sections render NOTHING

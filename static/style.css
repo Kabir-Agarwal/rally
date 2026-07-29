@@ -302,3 +302,13 @@ input,select{font:inherit;padding:11px 12px;border:1.5px solid var(--line);borde
 .rt.pos{color:var(--ink)} .rt.neg{color:#c0392b} .rt.zero{color:var(--muted)}
 
 .plink{cursor:pointer;display:inline-block}
+
+/* Tab badge: small count of matches awaiting your approval, on the Profile tab. */
+.tabs button { position: relative; }
+.tabbadge {
+  position: absolute; top: 2px; left: 50%; margin-left: 6px;
+  min-width: 16px; height: 16px; padding: 0 4px;
+  border-radius: 999px; background: #A94E2F; color: #fff;
+  font-size: 10px; font-weight: 800; line-height: 16px; text-align: center;
+}
+.tabbadge[hidden] { display: none; }

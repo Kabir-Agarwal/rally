@@ -1,6 +1,70 @@
 # CONTEXT.md — Rally (tennis scorer)
 
-## AUTH IS NOW TWO PATHS: Google, or player CODE + password (2026-07-29, latest)
+## UX BATCH from real phone users — T1-T9 (2026-07-29, latest)
+Four commits: `28fa3d1` (T1), `9cda2cb` (T3-T6), `6a9537e` (T2,T7,T8,T9), plus this note.
+
+**Tab renames (T1).** "Log" → **Create Game**, "History" → **Profile**. Labels only: the internal
+tab keys and the `/log` and `/history` URLs are unchanged, so links and routes still work.
+
+**Create Game shows one job (T2).** The tab is either the creation form or — once a match exists —
+that match's management view, never both. It is driven by `EDIT` (set by `hydrateEditor` from
+`/api/live`), i.e. by real server state, so the form also comes back by itself when the match
+ends. "Enter a past match" is now a button opening its own full-screen section; it *borrows* the
+court-picker DOM instead of cloning it, so there is still one `#courtWrap` and one `NEW` state.
+
+**Profile (T3).** The old top-left header sheet is gone; tapping the header name opens Profile.
+Game name, real name, Set password, Name#CODE, Copy/Share and Sign out all live there. "Past
+matches" is a button opening a full-screen list.
+
+**Approvals (T4) — READ THIS BEFORE CHANGING RATINGS.** Approval was *already* in the data model
+before this dispatch: the `approvals` table, `logic.approve/unapprove`, and the status ladder
+`live → pending_approval → counted`. **It already gates ratings**, because `db.rating_state` only
+reads `status='counted'`; un-approving a counted match drops it back to `pending_approval` and its
+rating contribution disappears on the next read. So this dispatch added **reporting and UI only**
+and changed no rating behaviour: a read-only `GET /api/me/approvals` returns your recent finished
+matches with `awaiting_me` / `approved_by_me` / `is_recorder`, the Profile tab carries a numeric
+badge, and each row offers Approve or Undo via the endpoints that already existed. The recorder
+auto-approves on finish, so a match is only ever "waiting" on other participants.
+> **OWNER DECISION — should unapproved matches count toward ratings?** Today they do NOT, and one
+> person can hold up a result indefinitely (or silently roll one back later with Undo). That is
+> defensible for a friendly ladder where a disputed score should not move ratings. The cost is
+> that ratings quietly lag reality whenever someone forgets to tap Approve — which is exactly what
+> the new badge is meant to fix. If forgetting turns out to be the common case, the softer rule is
+> "counts after N days unless disputed". **I did not change this. It is your call.**
+
+**Groups (T5).** Group switching moved into the Groups tab as a "Viewing" list with the current
+one ticked. The top-right chip and its sheet are deleted. Orphan check: nothing live referenced
+`openSwitcher`/`closeSwitcher`/`hdFilterName` afterwards; the only other mentions were in
+`templates/base.html`, which is **never rendered** (only `shell.html` and `admin.html` are), and
+were cleaned there too.
+
+**Leaderboard filter (T6).** `RANK.group` holds a group code or null for Everyone, independent of
+`window.FILTER`, and the request sends `?group=` directly. The funnel's "Who" control lists
+Everyone plus each of your groups. Switching group in the Groups tab keeps the board in step.
+An unknown/stale code falls back to everyone rather than erroring.
+
+**Win popup (T7).** Small pill, bottom of screen, fades after ~3s. No overlay, no sound, nothing
+to tap. It rides the same finished-match feed as the badge, so it reaches every participant with
+the app open — not just whoever was scoring. Each match congratulates you once (localStorage), and
+the first ever load seeds that list *without* replaying your back catalogue. Consequence worth
+knowing: the approvals poller is now **global** (20s), not tab-scoped, because the badge must be
+right from any tab.
+
+**Triple threat Cancel (T8).** The change-order picker snapshots the order *before* offering to
+change it and restores that snapshot exactly — including whether the rotation was confirmed —
+returning to whichever screen you came from.
+
+**Colour cues (T9).** Wins greenish, losses reddish on the record/last-5 line: tinted text on a
+wash of the same hue, via `.wl-w`/`.wl-l`/`.wlchip`.
+
+### Verified LIVE vs local only
+Tests are SQLite; production is Postgres. See the live-verification list in the report for this
+dispatch. Locally browser-driven: tab names, Profile card, Past-matches section, Create Game
+one-job layout, Enter-a-past-match section, Groups "Viewing" list, Ranks filter drawer, zero
+console errors. Not reachable without a second player on a real device: the live-match management
+view, the win popup firing, and approve/undo through the UI (all covered by tests instead).
+
+## AUTH IS NOW TWO PATHS: Google, or player CODE + password (2026-07-29, earlier)
 Live at `4fe2b09`, asset hash `5782818725`. **Email sign-in is gone.**
 
 ### Why email died (do not try to bring it back without reading this)

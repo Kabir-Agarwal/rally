@@ -402,6 +402,40 @@ async def api_me_claim(request: Request):
     return {"player_id": u["sub"], "code": code, "name": (d.get("name") or "").strip()}
 
 
+@app.get("/api/me/approvals")
+def api_my_approvals(request: Request):
+    """Finished matches this player is in, with THIS player's approval state on each.
+
+    Approval already existed in the data model before this endpoint: the `approvals` table plus
+    logic.approve/unapprove, and status='counted' (which is what ratings read) is only reached
+    once every participant has approved. So this is purely a REPORT — it changes no rating
+    behaviour. `awaiting_me` is what the Profile badge counts; `approved_by_me` is what lets the
+    same row offer Undo.
+    """
+    con = get_con()
+    u, p = me_player(con, request)
+    if not p:
+        con.close()
+        return {"count": 0, "matches": []}
+    pid = p["id"]
+    rows = con.execute(
+        "SELECT m.* FROM matches m JOIN match_players mp ON mp.match_id=m.id "
+        "WHERE mp.player_id=? AND m.status IN ('pending_approval','counted') "
+        "ORDER BY COALESCE(m.finished_at, m.created_at) DESC LIMIT 25", (pid,)).fetchall()
+    mine = {r["match_id"] for r in con.execute(
+        "SELECT match_id FROM approvals WHERE player_id=? AND action='approve'", (pid,)).fetchall()}
+    out = []
+    for m in rows:
+        v = match_view(con, m)
+        v["approved_by_me"] = m["id"] in mine
+        v["is_recorder"] = (m["logger_id"] == pid)
+        # The recorder auto-approves on finish, so a match is only ever "awaiting" someone else.
+        v["awaiting_me"] = (m["id"] not in mine)
+        out.append(v)
+    con.close()
+    return {"count": sum(1 for v in out if v["awaiting_me"]), "matches": out}
+
+
 @app.post("/api/me/rename")
 async def api_me_rename(request: Request):
     d = await _body(request)

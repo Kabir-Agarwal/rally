@@ -10,28 +10,19 @@
 <body>
 <div class="app">
   <div class="hd">
-    {# WHO you are, top-left: game name + real name, tap to edit both.
-       WHICH groups you're looking at, top-right: the filter chip (no group = "All groups"). #}
+    {# WHO you are, top-left: tap to open Profile, where names and password live now.
+       The old top-right group chip is gone — switching happens in the Groups tab. #}
     <div class="hd-row">
-      <div class="hd-me" id="hdMe" onclick="openNameEditor()">
+      <div class="hd-me" id="hdMe" onclick="switchTab('history')">
         <div class="hd-game"><span id="hdGame">Rally</span> <span class="hd-pen">✎</span></div>
         <div class="hd-real" id="hdReal">tennis scorer</div>
       </div>
-      <button class="gchip" id="hdFilter" onclick="openSwitcher()">
-        <span class="gname" id="hdFilterName">All groups</span><span class="chev">▾</span></button>
     </div>
     <div class="court-line"></div>
   </div>
 
   <div id="tabContent"></div>
   <div id="playerOverlay"></div>
-
-  <div class="switcher" id="switcher" onclick="if(event.target.id=='switcher')closeSwitcher()">
-    <div class="sheet2">
-      <div style="font-weight:800;margin:4px 0 8px">View</div>
-      <div id="switcherList" class="muted">…</div>
-    </div>
-  </div>
   <nav class="tabs" id="tabBar">
     <button data-tab="live"        onclick="switchTab('live')"><span class="ic">🎾</span>Live</button>
     <button data-tab="leaderboard" onclick="switchTab('leaderboard')"><span class="ic">🏆</span>Ranks</button>

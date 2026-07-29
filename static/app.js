@@ -141,90 +141,13 @@ function setHeaderName() {
   if (game) game.textContent = ME.player_name || "Rally";
   // Before identity resolves there is no name to show, so keep the subtitle rather than a gap.
   if (real) real.textContent = ME.player_name ? (ME.player_real_name || "") : "tennis scorer";
-  const f = document.getElementById("hdFilterName");
-  if (f) f.textContent = filterLabel();
 }
 
-// Tap the header name -> edit game name AND real name in one sheet. Same endpoint the Groups tab
-// uses (/api/me/rename), so both places stay in agreement.
-function openNameEditor() {
-  if (!ME.player_id) return;                    // nothing to rename yet (not signed in / no player)
-  closeNameEditor();
-  const sh = el(`<div class="psheet" id="nameSheet" onclick="if(event.target.id=='nameSheet')closeNameEditor()">
-    <div class="psheet-body card">
-      <div style="font-weight:800;font-size:16px;margin-bottom:10px">Your name</div>
-      <label class="fieldlab">Game name (what everyone sees)</label>
-      <input id="hdGameField" maxlength="24" autocomplete="off" value="${esc(ME.player_name || "")}">
-      <label class="fieldlab" style="margin-top:8px">Real name (optional)</label>
-      <input id="hdRealField" maxlength="40" autocomplete="off" value="${esc(ME.player_real_name || "")}">
-      <div class="err" id="hdNameErr"></div>
-      <div class="row" style="margin-top:10px;gap:8px">
-        <button class="btn sm ghost" style="flex:1" onclick="closeNameEditor()">Cancel</button>
-        <button class="btn sm clay" style="flex:1" id="hdNameSave" onclick="saveHeaderName()">Save</button>
-      </div>
-      <div style="border-top:1px solid rgba(0,0,0,.08);margin-top:14px;padding-top:12px">
-        <div style="font-weight:800;font-size:14px">Password sign-in</div>
-        <div class="muted" style="margin:2px 0 8px">Optional. Lets you sign in with
-          <b>${esc(ME.code || "your player ID")}</b> + a password instead of Google.</div>
-        <input id="hdPwField" type="password" maxlength="72" autocomplete="new-password"
-               placeholder="New password (min 8 characters)">
-        <div class="err" id="hdPwErr"></div>
-        <button class="btn sm" style="margin-top:8px" id="hdPwSave" onclick="saveHeaderPassword()">Set password</button>
-      </div></div></div>`);
-  document.body.appendChild(sh);
-  const g = document.getElementById("hdGameField");
-  if (g) { g.focus(); g.addEventListener("keydown", e => { if (e.key === "Enter") saveHeaderName(); }); }
-  const r = document.getElementById("hdRealField");
-  if (r) r.addEventListener("keydown", e => { if (e.key === "Enter") saveHeaderName(); });
-}
-function closeNameEditor() {
-  const s = document.getElementById("nameSheet");
-  if (s && s.parentNode) s.parentNode.removeChild(s);
-}
-// Set a password for player-ID sign-in. The password is sent once, over HTTPS, and the server
-// keeps only a salted hash — it is never stored in the browser and never echoed back.
-async function saveHeaderPassword() {
-  const err = document.getElementById("hdPwErr");
-  const field = document.getElementById("hdPwField");
-  const btn = document.getElementById("hdPwSave");
-  if (err) err.textContent = "";
-  const pw = field ? field.value : "";
-  if (!pw || pw.length < 8) { if (err) err.textContent = "password must be at least 8 characters"; return; }
-  if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
-  try {
-    await api("/api/auth/set-password", { password: pw });
-    if (field) field.value = "";
-    toast("Password set — you can sign in with " + (ME.code || "your player ID"));
-    if (btn) { btn.disabled = false; btn.textContent = "Set password"; }
-  } catch (e) {
-    if (err) err.textContent = String(e);
-    if (btn) { btn.disabled = false; btn.textContent = "Set password"; }
-  }
-}
-async function saveHeaderName() {
-  const err = document.getElementById("hdNameErr");
-  if (err) err.textContent = "";
-  const name = (document.getElementById("hdGameField") || {}).value;
-  const real_name = (document.getElementById("hdRealField") || {}).value;
-  if (!name || !name.trim()) { if (err) err.textContent = "game name is required"; return; }
-  const btn = document.getElementById("hdNameSave");
-  if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }     // no double-submit
-  try {
-    await api("/api/me/rename", { name: name.trim(), real_name });
-    const me = await resilient(() => api("/api/me"), { tries: 2 });
-    if (ok(me)) ME = me;
-    else { ME.player_name = name.trim(); ME.player_real_name = (real_name || "").trim(); }
-    setHeaderName();
-    closeNameEditor();
-    toast("Name updated");
-    renderTab(CURRENT_TAB || "live");           // names appear all over the current tab
-  } catch (e) {
-    if (err) err.textContent = String(e);
-    if (btn) { btn.disabled = false; btn.textContent = "Save"; }
-  }
-}
+// Names, real name and password moved to the Profile tab (T3). This shim stays because the
+// header pencil and older call sites still reference it.
+function openNameEditor() { switchTab("history"); }
+function closeNameEditor() { }
 
-// No group gate any more: signed in -> full app; signed out -> sign-in screen.
 async function authGate() {
   window.READONLY = false;
   if (window.Auth && Auth.signedIn()) { setHeaderName(); return true; }
@@ -289,25 +212,39 @@ async function chooseName() {
 }
 
 // ---------- header switcher: a FILTER, not a gate. "All groups" + each of the player's groups.
-async function openSwitcher() {
-  const s = document.getElementById("switcher"); if (!s) return; s.classList.add("open");
-  const list = document.getElementById("switcherList"); list.innerHTML = "";
-  const pick = (code, name) => {
-    window.FILTER = code; if (code) { window.GROUP = { code, name, is_public: true }; } else { window.GROUP = null; }
-    setHeaderName(); closeSwitcher();
-    history.replaceState({}, "", code ? "/g/" + code + "/live" : "/"); renderTab(CURRENT_TAB || "live");
-  };
-  const rowEl = (label, code, name, cur) => {
-    const row = el(`<div class="grp"><span class="gname">${esc(label)}${cur ? ' <span class="tickmark">✓</span>' : ''}</span>${code ? `<span class="tag">${esc(code)}</span>` : ''}</div>`);
-    row.onclick = () => pick(code, name); list.appendChild(row);
-  };
-  rowEl("All groups", null, null, !window.FILTER);
-  try {
-    const d = await api("/api/groups");
-    (d.groups || []).forEach(g => rowEl(g.name, g.code, g.name, window.FILTER === g.code));
-  } catch (e) { }
+
+// Group switching lives in the GROUPS TAB now (T5) — the top-right chip is gone. Same
+// interaction people liked: a list, current one ticked, tap to switch.
+function pickFilter(code, name) {
+  window.FILTER = code || null;
+  window.GROUP = code ? { code, name, is_public: true } : null;
+  setHeaderName();
+  history.replaceState({}, "", code ? "/g/" + code + "/groups" : "/groups");
+  renderGroupSwitch();
+  toast(code ? "Viewing " + name : "Viewing all groups");
+  // Everything downstream reads window.FILTER via G(), so just re-render the data tabs.
+  ["live", "leaderboard", "history", "log"].forEach(t => { if (PANELS[t]) PANELS[t].inited = false; });
+  // Keep the board's own filter (T6) in step with the group you just switched to, so the two
+  // controls never disagree about what you're looking at.
+  if (RANK) { RANK.group = window.FILTER || null; RANK.data = null; }
 }
-function closeSwitcher() { const s = document.getElementById("switcher"); if (s) s.classList.remove("open"); }
+async function renderGroupSwitch() {
+  const host = document.getElementById("groupSwitch"); if (!host) return;
+  const rows = [];
+  const row = (label, code, name) => {
+    const cur = (window.FILTER || null) === (code || null);
+    const r = el(`<div class="grp${cur ? " on" : ""}"><span class="gname">${esc(label)}${cur ? ' <span class="tickmark">✓</span>' : ''}</span>${code ? `<span class="tag">${esc(code)}</span>` : ""}</div>`);
+    r.onclick = () => pickFilter(code, name);
+    rows.push(r);
+  };
+  row("All groups", null, null);
+  const d = await resilient(() => api("/api/groups"), { tries: 2 });
+  if (ok(d)) (d.groups || []).forEach(g => row(g.name, g.code, g.name));
+  const box = el(`<div class="card"></div>`);
+  rows.forEach(r => box.appendChild(r));
+  host.innerHTML = "";
+  host.appendChild(box);
+}
 
 // ---------- polling (per-active-tab; cleared on tab switch) ----------
 let POLLERS = [];
@@ -402,7 +339,21 @@ function initLive() {
 }
 
 // ================= RANKS =================
-let RANK = { mode: "singles", scope: "group", data: null };
+// RANK.group: null = everyone, otherwise a group CODE. Independent of window.FILTER so the
+// board can be filtered without changing what the rest of the app is showing (T6).
+let RANK = { mode: "singles", group: (window.FILTER || null), data: null };
+let MYGROUPS = null;
+async function myGroups() {
+  if (MYGROUPS) return MYGROUPS;
+  const d = await resilient(() => api("/api/groups"), { tries: 2 });
+  MYGROUPS = ok(d) ? (d.groups || []) : [];
+  return MYGROUPS;
+}
+function rankGroupLabel() {
+  if (!RANK.group) return "Everyone";
+  const g = (MYGROUPS || []).find(x => x.code === RANK.group);
+  return g ? g.name : RANK.group;
+}
 function toggleFunnel(id) { const p = document.getElementById(id); p.style.display = p.style.display === "block" ? "none" : "block"; }
 function setRankOpt(kind, val, btn) {
   btn.parentElement.querySelectorAll("button").forEach(b => b.classList.remove("on")); btn.classList.add("on");
@@ -410,8 +361,9 @@ function setRankOpt(kind, val, btn) {
 }
 async function loadRanks() {
   const first = !RANK.data;
-  const d = await resilient(() => api(G("/leaderboard?mode=" + RANK.mode)),
-    first ? { onRetry: bootSlowNote } : { tries: 1 });
+  const q = "/api/leaderboard?mode=" + RANK.mode +
+    (RANK.group ? "&group=" + encodeURIComponent(RANK.group) : "");
+  const d = await resilient(() => api(q), first ? { onRetry: bootSlowNote } : { tries: 1 });
   if (!ok(d)) {
     if (RANK.data) return;                      // a dropped refresh must not wipe the board
     const host = document.getElementById("rankList");
@@ -456,7 +408,7 @@ function allRankRows() {
 function renderRanks() {
   if (!RANK.data) return;
   const sl = document.getElementById("rankScopeLine");
-  if (sl) sl.textContent = (RANK.mode === "doubles" ? "Doubles" : "Singles") + " · " + filterLabel();
+  if (sl) sl.textContent = (RANK.mode === "doubles" ? "Doubles" : "Singles") + " · " + rankGroupLabel();
   const q = (document.getElementById("rankSearch").value || "").toLowerCase();
   const all = allRankRows();
   const shown = all.filter(r => r.name.toLowerCase().includes(q));
@@ -516,12 +468,14 @@ const HIST_KIND_FROM = { "All": "all", "Singles": "singles", "Doubles": "doubles
 function scopeLabel(s) { return s === "everyone" ? "Everyone" : "This group"; }
 // The active view is a group FILTER (or "All groups"); the old "This group" label was wrong now.
 function filterLabel() { return window.FILTER && window.GROUP ? window.GROUP.name : "All groups"; }
-function openFunnel(which) {
+async function openFunnel(which) {
   const isR = which === "ranks";
+  const groups = isR ? await myGroups() : [];
   const modes = isR ? ["Singles", "Doubles"] : ["All", "Singles", "Doubles", "Triple threat"];
   const curMode = isR ? (RANK.mode === "doubles" ? "Doubles" : "Singles")
     : HIST_KIND_LABELS[HIST.kind];
-  const curScope = scopeLabel(isR ? RANK.scope : HIST.scope);
+  const scopeOpts = isR ? ["Everyone"].concat(groups.map(g => g.name)) : ["This group", "Everyone"];
+  const curScope = isR ? rankGroupLabel() : scopeLabel(HIST.scope);
   let mSel = curMode, sSel = curScope;
   const ov = el(`<div class="drawerwrap open">
     <div class="drawerbg" onclick="closeFunnel()"></div>
@@ -541,11 +495,19 @@ function openFunnel(which) {
     });
   };
   fc(ov.querySelector("#fMode"), modes, () => mSel, v => mSel = v);
-  fc(ov.querySelector("#fScope"), ["This group", "Everyone"], () => sSel, v => sSel = v);
+  fc(ov.querySelector("#fScope"), scopeOpts, () => sSel, v => sSel = v);
   ov.querySelector("#fApply").onclick = () => {
-    const scope = sSel === "Everyone" ? "everyone" : "group";
-    if (isR) { RANK.mode = mSel === "Doubles" ? "doubles" : "singles"; RANK.scope = scope; loadRanks(); }
-    else { HIST.kind = HIST_KIND_FROM[mSel]; HIST.scope = scope; loadHistory(); }
+    if (isR) {
+      RANK.mode = mSel === "Doubles" ? "doubles" : "singles";
+      const g = groups.find(x => x.name === sSel);
+      RANK.group = g ? g.code : null;              // "Everyone" -> no group param
+      RANK.data = null;                            // scope changed: don't keep the old board
+      loadRanks();
+    } else {
+      HIST.kind = HIST_KIND_FROM[mSel];
+      HIST.scope = sSel === "Everyone" ? "everyone" : "group";
+      loadHistory();
+    }
     closeFunnel();
   };
 }
@@ -625,6 +587,7 @@ async function saveName() {
   } catch (e) { err.textContent = e; }
 }
 async function initGroups() {
+  renderGroupSwitch();
   renderYouCard();
   renderAddSomeone();
   renderFriends();
@@ -865,7 +828,153 @@ function storyLine(s) {
   if (s.longest_streak >= 4) bits.push(`${s.longest_streak}-pt run`);
   return bits.length ? `<div class="note">🎾 Live-scored · ${bits.join(" · ")}</div>` : "";
 }
-function initHistory() { loadHistory(); }
+function initHistory() { renderProfileCard(); loadApprovals(); poll(loadApprovals, 15000); }
+
+// ---------- full-screen sub-section (Past matches, Enter a past match) ----------
+// A tab should show ONE job. Anything secondary opens over the whole screen with a Back button
+// instead of stacking inline, which is what made the old Log/History tabs a wall on a phone.
+function openFullSection(title, bodyHtml) {
+  closeFullSection();
+  const ov = el(`<div class="fullsec" id="fullSec">
+    <div class="fullsec-hd">
+      <button class="btn sm ghost" style="width:auto;flex:0 0 auto" onclick="closeFullSection()">← Back</button>
+      <div class="fullsec-title">${esc(title)}</div></div>
+    <div class="fullsec-body" id="fullSecBody">${bodyHtml}</div></div>`);
+  document.body.appendChild(ov);
+  return ov.querySelector("#fullSecBody");
+}
+function closeFullSection() { const s = document.getElementById("fullSec"); if (s) s.remove(); }
+
+function openPastMatches() {
+  openFullSection("Past matches", `<div class="row" style="margin:12px 16px 0">
+      <div class="sec-title" style="margin:0;flex:1">Matches <span id="histScopeLine" class="scopeinline"></span></div>
+      <button class="funnelbtn" onclick="openFunnel('hist')">▼</button></div>
+    <div id="historyList"><div class="empty">Loading…</div></div>`);
+  loadHistory();
+}
+
+// ---------- Profile: identity lives here now (moved off the top-left header sheet) ----------
+function renderProfileCard() {
+  const host = document.getElementById("profileCard"); if (!host) return;
+  if (!ME.player_id) {
+    host.innerHTML = `<div class="card"><div class="empty">Sign in to see your profile.</div></div>`;
+    return;
+  }
+  const dn = ME.player_name || "—", code = ME.code || "";
+  host.innerHTML = `<div class="card">
+    <div class="row">
+      <span class="avatar" style="width:40px;height:40px;font-size:17px;flex:0 0 auto">${esc((dn[0] || "?").toUpperCase())}</span>
+      <div style="flex:1"><div class="pn-game" style="font-size:16px">${esc(dn)}<span class="muted" style="font-weight:800">#${esc(code)}</span></div>
+        ${ME.player_real_name ? `<div class="pn-real">${esc(ME.player_real_name)}</div>` : ""}</div>
+      <button class="btn sm ghost" style="flex:0 0 auto" onclick="Auth.signOut();location.reload()">Sign out</button></div>
+    <div class="row" style="margin-top:6px">
+      <button class="btn sm ghost" style="width:auto;padding:2px 8px" onclick="copyCode()">Copy ID</button>
+      <button class="btn sm ghost" style="width:auto;padding:2px 8px" onclick="shareCode()">Share</button></div>
+
+    <div style="border-top:1px solid var(--line);margin-top:12px;padding-top:12px">
+      <label class="fieldlab">Game name (what everyone sees)</label>
+      <input id="pfGame" maxlength="24" autocomplete="off" value="${esc(ME.player_name || "")}">
+      <label class="fieldlab" style="margin-top:8px">Real name (optional)</label>
+      <input id="pfReal" maxlength="40" autocomplete="off" value="${esc(ME.player_real_name || "")}">
+      <div class="err" id="pfNameErr"></div>
+      <button class="btn sm clay" style="margin-top:8px" id="pfNameSave" onclick="saveProfileName()">Save name</button></div>
+
+    <div style="border-top:1px solid var(--line);margin-top:12px;padding-top:12px">
+      <div style="font-weight:800;font-size:14px">Password sign-in</div>
+      <div class="muted" style="margin:2px 0 8px">Optional. Lets you sign in with
+        <b>${esc(code || "your player ID")}</b> + a password instead of Google.</div>
+      <input id="pfPw" type="password" maxlength="72" autocomplete="new-password"
+             placeholder="New password (min 8 characters)">
+      <div class="err" id="pfPwErr"></div>
+      <button class="btn sm" style="margin-top:8px" id="pfPwSave" onclick="saveProfilePassword()">Set password</button></div>
+  </div>`;
+}
+async function saveProfileName() {
+  const err = document.getElementById("pfNameErr"); if (err) err.textContent = "";
+  const name = (document.getElementById("pfGame") || {}).value;
+  const real_name = (document.getElementById("pfReal") || {}).value;
+  if (!name || !name.trim()) { if (err) err.textContent = "game name is required"; return; }
+  const btn = document.getElementById("pfNameSave");
+  if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
+  try {
+    await api("/api/me/rename", { name: name.trim(), real_name });
+    const me = await resilient(() => api("/api/me"), { tries: 2 });
+    if (ok(me)) ME = me;
+    else { ME.player_name = name.trim(); ME.player_real_name = (real_name || "").trim(); }
+    setHeaderName(); renderProfileCard(); toast("Name updated");
+  } catch (e) {
+    if (err) err.textContent = String(e);
+    const b = document.getElementById("pfNameSave");
+    if (b) { b.disabled = false; b.textContent = "Save name"; }
+  }
+}
+async function saveProfilePassword() {
+  const err = document.getElementById("pfPwErr"); const field = document.getElementById("pfPw");
+  const btn = document.getElementById("pfPwSave");
+  if (err) err.textContent = "";
+  const pw = field ? field.value : "";
+  if (!pw || pw.length < 8) { if (err) err.textContent = "password must be at least 8 characters"; return; }
+  if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
+  try {
+    await api("/api/auth/set-password", { password: pw });
+    if (field) field.value = "";
+    toast("Password set — you can sign in with " + (ME.code || "your player ID"));
+  } catch (e) { if (err) err.textContent = String(e); }
+  const b2 = document.getElementById("pfPwSave");
+  if (b2) { b2.disabled = false; b2.textContent = "Set password"; }
+}
+
+// ---------- Profile: match approvals ----------
+// Approval already existed server-side (the `approvals` table + logic.approve/unapprove) and
+// already gates ratings: a match only reaches status='counted' once every participant approves.
+// This UI reports and toggles that existing flag — it does not change how ratings are computed.
+let APPR = { matches: [] };
+async function loadApprovals() {
+  if (!ME.player_id) { setApprBadge(0); return; }
+  const d = await resilient(() => api("/api/me/approvals"), { tries: 2 });
+  if (!ok(d)) return;                                  // a dropped refresh keeps what's rendered
+  APPR.matches = d.matches || [];
+  setApprBadge(d.count || 0);
+  renderApprovals();
+}
+function setApprBadge(n) {
+  const b = document.getElementById("apprBadge");
+  if (b) { b.textContent = n > 9 ? "9+" : String(n); b.hidden = !n; }
+  const c = document.getElementById("apprCount");
+  if (c) c.textContent = n ? "· " + n + " waiting" : "";
+}
+function renderApprovals() {
+  const host = document.getElementById("apprList"); if (!host) return;
+  const waiting = APPR.matches.filter(m => m.awaiting_me);
+  const done = APPR.matches.filter(m => !m.awaiting_me).slice(0, 5);
+  host.innerHTML = "";
+  if (!waiting.length && !done.length) { host.innerHTML = `<div class="empty">Nothing to approve.</div>`; return; }
+  if (!waiting.length) host.appendChild(el(`<div class="empty">Nothing waiting on you.</div>`));
+  waiting.forEach(m => host.appendChild(approvalCard(m, true)));
+  if (done.length) {
+    host.appendChild(el(`<div class="sec-title" style="margin-top:10px">Approved by you</div>`));
+    done.forEach(m => host.appendChild(approvalCard(m, false)));
+  }
+}
+function approvalCard(m, waiting) {
+  const when = esc((m.played_on || "").replace("T", " "));
+  const card = el(`<div class="match">
+    <div class="mtitle">${matchTitle(m)}</div>
+    <div class="note">${esc(String(m.kind).toUpperCase())} · ${when}${m.is_recorder ? " · you recorded this" : ""}</div>
+    <div class="row" style="margin-top:8px"><button class="btn sm" style="flex:1"></button></div>
+    <div class="err"></div></div>`);
+  const btn = card.querySelector("button"), err = card.querySelector(".err");
+  btn.classList.add(waiting ? "clay" : "ghost");
+  btn.textContent = waiting ? "Approve" : "Undo approval";
+  btn.onclick = async () => {
+    btn.disabled = true; err.textContent = "";
+    try {
+      await api(G("/match/" + m.id + (waiting ? "/approve" : "/unapprove")));
+      await loadApprovals();
+    } catch (e) { err.textContent = String(e); btn.disabled = false; }
+  };
+  return card;
+}
 
 // ================= PLAYER (in-app overlay) =================
 let PLAYER_OPEN = false;
@@ -934,7 +1043,8 @@ const TAB_SKELETONS = {
     <div id="youCard"></div>
     <div id="rankList" class="card" style="padding:2px 2px"><div class="empty">Loading…</div></div>`,
   log: `<div id="logRoot"><div class="empty">Loading…</div></div>`,
-  groups: `<div class="sec-title">You</div><div id="youCardG"></div>
+  groups: `<div class="sec-title">Viewing</div><div id="groupSwitch"></div>
+    <div class="sec-title">You</div><div id="youCardG"></div>
     <div class="sec-title">Add someone</div><div id="addSomeone"></div>
     <div id="friendReqs"></div>
     <div class="sec-title">Friends</div><div id="friendsList"></div>
@@ -944,10 +1054,11 @@ const TAB_SKELETONS = {
       <div style="height:8px"></div>
       <div id="joinRow"><button class="btn ghost sm" onclick="toggleJoin()">+ Join another group</button></div>
       <div id="joinOut2" class="err"></div></div>`,
-  history: `<div class="row" style="margin:12px 16px 0">
-      <div class="sec-title" style="margin:0;flex:1">History <span id="histScopeLine" class="scopeinline"></span></div>
-      <button class="funnelbtn" onclick="openFunnel('hist')">▼</button></div>
-    <div id="historyList"><div class="empty">Loading…</div></div>`,
+  history: `<div class="sec-title">You</div>
+    <div id="profileCard"></div>
+    <div class="sec-title">Awaiting your approval <span id="apprCount" class="scopeinline"></span></div>
+    <div id="apprList"><div class="empty">Loading…</div></div>
+    <div class="card"><button class="btn ghost" onclick="openPastMatches()">📜 Past matches</button></div>`,
 };
 // Lazy wrappers: initLog lives in log.js, which is NOT loaded on the landing page. Referencing
 // it directly here would throw at load and crash the whole boot. Arrows defer the lookup to

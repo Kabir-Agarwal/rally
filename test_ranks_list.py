@@ -122,8 +122,10 @@ def test_unranked_order_is_stable_across_a_rename(app_client):
         return [r["id"] for r in c.get("/api/leaderboard?mode=singles").json()["rows"]]
 
     before = order()
-    # NOT the alphabetical order the board used to use — that would be Ann, Mia, Zoe.
-    assert before != ["p2", "p3", "p1"], "unranked order must not be driven by game_name"
+    # NOTE: do not assert `before != alphabetical`. created_at is second-granular so all three tie
+    # and the random `code` decides — which lands on alphabetical order roughly one run in six.
+    # Agreeing with alphabetical by coincidence is not a bug; being CHANGED by a rename is. The
+    # two assertions below are the actual requirement and are deterministic.
 
     # Rename the first player to sort last alphabetically, and the alphabetically-first to sort
     # last. Under the old ordering this reshuffled the board for everyone.

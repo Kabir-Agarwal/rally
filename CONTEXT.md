@@ -1,6 +1,95 @@
 # CONTEXT.md — Rally (tennis scorer)
 
-## FIRST EXTERNAL USER FEEDBACK — P1-P4 (2026-07-28, latest)
+## AUTH IS NOW TWO PATHS: Google, or player CODE + password (2026-07-29, latest)
+Live at `4fe2b09`, asset hash `5782818725`. **Email sign-in is gone.**
+
+### Why email died (do not try to bring it back without reading this)
+Supabase decides code-vs-link purely from its email template: `{{ .ConfirmationURL }}` in the
+body means it mails a LINK, `{{ .Token }}` means it mails a 6-digit CODE. Both stock templates
+ship with `ConfirmationURL`. **Those templates cannot be edited without configuring custom SMTP**,
+so on the default Supabase sender the app could only ever mail a link — and a link opens the mail
+app's own browser, a different storage context, which is what stranded the first external user's
+session. The flow was broken by the platform, not by our code, so it was removed rather than
+left as a trap. `/api/auth/email/start` and `/api/auth/email/verify` now answer **410** so old
+cached clients get an honest error instead of a 404 or a hang; the OTP code itself is deleted.
+Reviving email means: buy/configure SMTP, put `{{ .Token }}` in BOTH the Confirm-signup and
+Magic-Link templates, then restore the routes.
+
+### The two paths
+* **Google — the only way to create an account.** Unchanged.
+* **Player CODE + password — sign-in only, for players who already exist.** The signed-out screen
+  shows exactly these two, plus the line "New here? Continue with Google."
+
+### How the password path works
+Passwords are OURS now. The old implementation delegated to Supabase (code → auth uuid → Admin
+API → email → password grant) and needed a service-role key on the server just to sign someone
+in; that is deleted, along with the `SUPABASE_SERVICE_KEY` dependency. `players.password_hash`
+holds a **salted scrypt digest** (`hashlib.scrypt`, stdlib — no bcrypt/argon2 wheel added to the
+Vercel build; n/r/p and the salt live inside the hash string so they can be raised later without
+invalidating existing rows). No email is read, stored or returned on this path at all — player
+codes are printed publicly as Name#CODE, so a code→email lookup would make the leaderboard an
+email directory.
+
+**The session token.** On success the server mints a `rally.`-prefixed HMAC-SHA256 token
+(`auth.mint_session`) in the same envelope as the dev mock token but under a distinct prefix, so
+a production session is never mistaken for a mock. `verify_token()` accepts it locally, so it
+costs no network round trip and never touches the 60s Supabase verification cache. Security
+properties, plainly:
+* Signed with `AUTH_SECRET` (or `ADMIN_KEY`). Whoever holds that key can mint a session for any
+  player — but `ADMIN_KEY` is already god-mode, so this grants no new authority. It must stay a
+  real secret in the Vercel env, never committed.
+* If neither var is set we **refuse to mint** in Supabase mode rather than silently signing with
+  the public `dev-auth-secret` default. Fail closed. (Verified live: `/admin` rejects the repo's
+  default key, so a real key IS configured in production.)
+* Bearer credential valid until `exp`, with **no revocation list** — hence the deliberately short
+  7-day TTL vs the mock token's 30 days. Rotating `AUTH_SECRET` invalidates every session at once.
+* Carries only `{sub, email, exp}`; `sub` is the player uuid, so every downstream check
+  (require_player, group admin, writes) treats it exactly like a Google session.
+
+**Abuse limits.** Two independent 5-per-minute buckets, one per code and one per IP, both
+recorded on every attempt (no short-circuit) so rotating IPs cannot walk a single account. Wrong
+code and wrong password return an identical 401 "code or password incorrect", and an unknown code
+still pays a dummy scrypt verify so timing is not a code oracle. The one deliberate exception:
+a code that exists but has **no** password gets a 403 telling them to use Google and set one —
+that reveals only that a PUBLIC code exists, which the leaderboard already shows.
+Caveat: the buckets are in-memory, so they are per serverless instance; an attacker spread across
+instances gets more than the nominal 5/min. Move them to the DB if that ever matters.
+
+### Recovery story (there is no reset email — by design)
+Email is gone, so there is no "forgot password" mail and there will not be one. Recovery runs
+through the identity the account actually has: **the player signs in with Google** — which always
+works, because Google is the account's real identity and the password is only ever a secondary
+convenience — **and sets a new password from the header edit sheet** (tap your name → "Password
+sign-in" → Set password, min 8 chars). If they are locked out in a way Google cannot fix, an
+owner opens `/admin` → **Password recovery**, pastes the player id, and hits Reset password; that
+clears `players.password_hash` (the player reverts to "no password set", so path B tells them to
+use Google) and writes a `reset-password` row to `admin_log` exactly like every other admin
+action. The endpoint is admin-key gated and returns 404 rather than 403, so it does not confirm
+it exists to anyone without the key.
+
+### Schema
+`players.password_hash` (nullable TEXT) added to `db.SCHEMA`, `schema.py` and `db.REQUIRED`.
+Live Postgres was migrated FIRST (`add_players_password_hash`, nullable so the already-deployed
+code kept running), then the app was pushed. NULL simply means "no password set".
+
+### Verified LIVE (Postgres) vs only locally (SQLite)
+Tests run on SQLite; production is Postgres. Explicitly:
+* **Verified on the LIVE site:** both email routes return 410; unknown code → generic 401;
+  missing fields → 400; a real public code with no password → the 403 Google message (this one
+  proves the new `player_by_code` + `password_hash` read genuinely works on Postgres); the
+  signed-out screen shows exactly the two options and the "New here?" line with no email UI
+  anywhere in the served bundle; asset hash changed `526c67bac0` → `5782818725`; zero console
+  errors.
+* **Verified only locally (SQLite):** a *successful* password sign-in and the token it mints, the
+  set-password round trip, the rate limiter actually firing, hash-never-plaintext, salting, and
+  the admin reset clearing the hash + writing the admin log. These are covered by 14 tests in
+  `test_password_auth.py` and were also driven by hand through a real browser against a local
+  server in Supabase mode. They are NOT exercised against production, because doing so would mean
+  creating a real player and password in live data.
+* **Not verified anywhere yet:** an end-to-end successful password sign-in *on production*. The
+  first person to set a password is the real test of that.
+
+## FIRST EXTERNAL USER FEEDBACK — P1-P4 (2026-07-28, earlier)
 Shipped as `c8e06d8` (asset hash `526c67bac0`, live, zero console errors).
 
 ### P1 — email sign-in. Code fixed; ONE DASHBOARD STEP STILL NEEDED (owner)

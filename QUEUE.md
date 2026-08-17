@@ -1,6 +1,6 @@
 # QUEUE
 
-- [~] 1. Item #0: re-study Playeri for steal-worthy features, run the reuse-audit, verify Vercel/Supabase free-tier headroom  (SPEC: Y7)
+- [x] 1. Item #0: re-study Playeri for steal-worthy features, run the reuse-audit, verify Vercel/Supabase free-tier headroom  (SPEC: Y7)
 - [ ] 2. Lock prod-safe delivery: block-by-block, dummy UI on new screens  (SPEC: Y1)
 - [ ] 3. Keep the theme  (SPEC: Y2)
 - [ ] 4. Keep doubles chemistry  (SPEC: Y2)

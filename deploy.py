@@ -82,6 +82,7 @@ def preflight():
     import practice
     import competitions
     import nearby
+    import messenger
     blocks.validate()
     theme.check()                    # SPEC Y2 KEEP theme: abort if static/style.css :root drifted
     chemistry.check()                # SPEC Y2 KEEP doubles chemistry: abort if the pair contract regressed
@@ -92,6 +93,7 @@ def preflight():
     practice.check()                 # SPEC Y3 ADD practice-vs-rated split: abort if practice leaks into the rating
     competitions.check()             # SPEC Y3 ADD competitions hub: abort if the lifecycle/sections/dispatch regressed
     nearby.check()                   # SPEC Y3 ADD nearby players: abort if the 50km haversine / Connect engine regressed
+    messenger.check()                # SPEC Y3 ADD messenger + basic AI helper: abort if DM threads / inbox / smart-reply regressed
     importlib.import_module("app")   # boot check: raises if the app can't construct
     print("preflight OK")
 

@@ -45,7 +45,12 @@ REGISTRY = [
     # Player location (lat/lng, discoverable opt-in) + the connections table follow with the batched
     # migrations (item #19, SPEC Y5 — no session applies schema); privacy/permission are item #16.
     {"id": "nearby",       "label": "Nearby",      "icon": "\U0001F4CD", "state": "dummy"},
-    {"id": "messages",     "label": "Messages",    "icon": "\U0001F4AC", "state": "off"},
+    # messenger: engine live (messenger.py — DM threads keyed like a connection, inbox conversation-
+    # list, unread/read model, and a basic AI helper: keyword smart-replies, no LLM); screen lands as
+    # dummy UI (item #12). The messages table + thread/inbox screens + smart-reply bar follow with the
+    # batched migrations (item #19, SPEC Y5 — no session applies schema); block/report + DM gating are
+    # item #16. "Advanced messenger AI" stays v2 (SPEC OUT).
+    {"id": "messages",     "label": "Messages",    "icon": "\U0001F4AC", "state": "dummy"},
     {"id": "highlights",   "label": "Highlights",  "icon": "\U0001F3AC", "state": "off"},
     {"id": "feed",         "label": "Feed",        "icon": "\U0001F4F0", "state": "off"},
     {"id": "orgs",         "label": "Clubs",       "icon": "\U0001F3E2", "state": "off"},

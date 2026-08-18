@@ -14,7 +14,7 @@
 - [x] 12. Add messenger + basic AI helper  (SPEC: Y3)
 - [x] 13. Add highlights — landscape video upload, reputation stars, laurels  (SPEC: Y3)
 - [x] 14. Add posts feed + followed players' matches  (SPEC: Y3)
-- [~] 15. Add org/club accounts  (SPEC: Y3)
+- [x] 15. Add org/club accounts  (SPEC: Y3)
 - [ ] 16. Add public layer — privacy controls, block/report, location-permission handling, 16+ gate  (SPEC: Y3)
 - [ ] 17. Build Elo-style skill rating on the FIFA card  (SPEC: Y4)
 - [ ] 18. Build activity/reputation form count  (SPEC: Y4)

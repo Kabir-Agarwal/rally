@@ -18,6 +18,6 @@
 - [x] 16. Add public layer — privacy controls, block/report, location-permission handling, 16+ gate  (SPEC: Y3)
 - [x] 17. Build Elo-style skill rating on the FIFA card  (SPEC: Y4)
 - [x] 18. Build activity/reputation form count  (SPEC: Y4)
-- [ ] 19. Adopt batched migrations — one migrations/block-N.sql per feature-block, owner applies via Supabase MCP  (SPEC: Y5)
+- [~] 19. Adopt batched migrations — one migrations/block-N.sql per feature-block, owner applies via Supabase MCP  (SPEC: Y5)
 - [ ] 20. Build Y6 Tier 1 video tool — rally segmentation, counts/lengths, highlight reel, movement heatmaps; laptop-only, upload stats JSON + clips  (SPEC: Y6)
 - [ ] 21. Gate Y6 Tier 2 on owner's real Stage-0 clip validation  (SPEC: Y6)

@@ -67,19 +67,21 @@ def get(url):
 
 def preflight():
     """Prod-safe gate (SPEC Y1): never upload a build that can't boot, whose feature-block registry
-    is inconsistent, or that regresses the approved theme, doubles chemistry or delete-past-matches
-    (SPEC Y2). Importing app runs db.init_db (fails loud if unmigrated); the block registry, theme
-    palette, the pair-rating contract and the soft-delete contract are validated. Any failure aborts
-    the deploy before a single file is uploaded."""
+    is inconsistent, or that regresses the approved theme, doubles chemistry, delete-past-matches or
+    earned-from-0 card stats (SPEC Y2). Importing app runs db.init_db (fails loud if unmigrated); the
+    block registry, theme palette, the pair-rating contract, the soft-delete contract and the card
+    payload are validated. Any failure aborts the deploy before a single file is uploaded."""
     import importlib
     import blocks
     import theme
     import chemistry
     import deletion
+    import cardstats
     blocks.validate()
     theme.check()                    # SPEC Y2 KEEP theme: abort if static/style.css :root drifted
     chemistry.check()                # SPEC Y2 KEEP doubles chemistry: abort if the pair contract regressed
     deletion.check()                 # SPEC Y2 KEEP delete-past-matches: abort if soft delete / rollback regressed
+    cardstats.check()                # SPEC Y2 KEEP earned-from-0 card stats: abort if the card is seeded / mis-counted
     importlib.import_module("app")   # boot check: raises if the app can't construct
     print("preflight OK")
 

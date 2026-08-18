@@ -28,7 +28,9 @@ REGISTRY = [
     {"id": "groups",       "label": "Groups",      "icon": "\U0001F465", "state": "live"},
     {"id": "history",      "label": "Profile",     "icon": "\U0001F464", "state": "live"},
     # --- planned (SPEC Y3), landing block by block ---
-    {"id": "tournaments",  "label": "Tournaments", "icon": "\U0001F3C6", "state": "off"},
+    # tournaments: engine live (tournaments.py — 4–32 draws, BYEs, live brackets); screen lands as
+    # dummy UI (item #7). Create/Manage + persistence follow with the competitions hub (item #10).
+    {"id": "tournaments",  "label": "Tournaments", "icon": "\U0001F3C6", "state": "dummy"},
     {"id": "leagues",      "label": "Leagues",     "icon": "\U0001F3BD", "state": "off"},
     {"id": "competitions", "label": "Compete",     "icon": "⚔️", "state": "off"},
     {"id": "nearby",       "label": "Nearby",      "icon": "\U0001F4CD", "state": "off"},

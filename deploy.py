@@ -77,11 +77,13 @@ def preflight():
     import chemistry
     import deletion
     import cardstats
+    import tournaments
     blocks.validate()
     theme.check()                    # SPEC Y2 KEEP theme: abort if static/style.css :root drifted
     chemistry.check()                # SPEC Y2 KEEP doubles chemistry: abort if the pair contract regressed
     deletion.check()                 # SPEC Y2 KEEP delete-past-matches: abort if soft delete / rollback regressed
     cardstats.check()                # SPEC Y2 KEEP earned-from-0 card stats: abort if the card is seeded / mis-counted
+    tournaments.check()              # SPEC Y3 ADD tournaments: abort if the bracket engine (4–32, BYEs, live) regressed
     importlib.import_module("app")   # boot check: raises if the app can't construct
     print("preflight OK")
 

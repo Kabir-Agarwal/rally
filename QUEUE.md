@@ -8,7 +8,7 @@
 - [x] 6. Keep earned-from-0 card stats  (SPEC: Y2)
 - [x] 7. Add tournaments — 4–32 draws, BYEs, live brackets  (SPEC: Y3)
 - [x] 8. Add round-robin leagues  (SPEC: Y3)
-- [~] 9. Add practice-vs-rated split  (SPEC: Y3)
+- [x] 9. Add practice-vs-rated split  (SPEC: Y3)
 - [ ] 10. Add competitions hub — Create/Manage/In-Queue/Scheduled  (SPEC: Y3)
 - [ ] 11. Add nearby players — 50km + Connect  (SPEC: Y3)
 - [ ] 12. Add messenger + basic AI helper  (SPEC: Y3)

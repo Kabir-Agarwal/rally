@@ -58,7 +58,14 @@ REGISTRY = [
     # migrations (item #19, SPEC Y5 — no session applies schema); block/report + 16+ gate are item #16.
     # Video *processing* (rally segmentation / reel / heatmaps) is the Y6 laptop-only tool (items #20–21).
     {"id": "highlights",   "label": "Highlights",  "icon": "\U0001F3AC", "state": "dummy"},
-    {"id": "feed",         "label": "Feed",        "icon": "\U0001F4F0", "state": "off"},
+    # feed: engine live (feed.py — a DIRECTED follow graph (following is asymmetric, keyed (follower,
+    # followee), not the canonical friendships pair — so mutual follows coexist); text posts with a
+    # body/timestamp trust guard; and a newest-first timeline merging the posts + the matches of
+    # everyone you follow, and your own, each row tagged post/match); screen lands as dummy UI (item
+    # #14). The follows + posts tables + the compose box / follow button / merged timeline follow with
+    # the batched migrations (item #19, SPEC Y5 — no session applies schema); block/report + private
+    # accounts are item #16.
+    {"id": "feed",         "label": "Feed",        "icon": "\U0001F4F0", "state": "dummy"},
     {"id": "orgs",         "label": "Clubs",       "icon": "\U0001F3E2", "state": "off"},
 ]
 

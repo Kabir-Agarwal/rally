@@ -84,6 +84,7 @@ def preflight():
     import nearby
     import messenger
     import highlights
+    import feed
     blocks.validate()
     theme.check()                    # SPEC Y2 KEEP theme: abort if static/style.css :root drifted
     chemistry.check()                # SPEC Y2 KEEP doubles chemistry: abort if the pair contract regressed
@@ -96,6 +97,7 @@ def preflight():
     nearby.check()                   # SPEC Y3 ADD nearby players: abort if the 50km haversine / Connect engine regressed
     messenger.check()                # SPEC Y3 ADD messenger + basic AI helper: abort if DM threads / inbox / smart-reply regressed
     highlights.check()               # SPEC Y3 ADD highlights: abort if the landscape gate / reputation stars / laurels regressed
+    feed.check()                     # SPEC Y3 ADD posts feed: abort if the directed follow graph / posts / merged timeline regressed
     importlib.import_module("app")   # boot check: raises if the app can't construct
     print("preflight OK")
 

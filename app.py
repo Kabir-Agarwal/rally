@@ -13,10 +13,12 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from datetime import datetime
 import db
 import logic
 import scoring
 import ratings
+import form
 import auth
 import auth_playerid
 import blocks
@@ -656,7 +658,8 @@ def player_payload(con, gid, pid):
             n = st["pairs_n"][(a, b)]
             pairs.append({"partner": names.get(partner, "?"), "rating": round(rating), "n": n,
                           "provisional": n < ratings.PAIR_PROVISIONAL})
-    hist, last5, wins, losses = [], [], 0, 0
+    hist, last5, wins, losses, ages = [], [], 0, 0, []
+    now_dt = datetime.utcnow()
     where_g = "AND m.group_id=?" if gid else ""
     params = [pid] + ([gid] if gid else [])
     ms = con.execute(
@@ -665,6 +668,11 @@ def player_payload(con, gid, pid):
         "ORDER BY COALESCE(m.finished_at,m.created_at) DESC, m.id DESC", tuple(params)).fetchall()
     for m in ms:
         v = match_view(con, m)
+        ts = m["finished_at"] or m["created_at"]      # Y4 form: age of this counted match, for recency
+        try:
+            ages.append(max((now_dt - datetime.fromisoformat(ts)).days, 0))
+        except (ValueError, TypeError):
+            pass
         if m["kind"] != "tt":
             won = v.get("winner_side") == (1 if pid in [x["id"] for x in v["side1"]] else 2)
         else:
@@ -675,9 +683,13 @@ def player_payload(con, gid, pid):
         if len(last5) < 5:
             last5.append("W" if won else "L")
         hist.append(v)
+    # Y4 second card number: activity/reputation form count. Reputation laurels aren't
+    # persisted until the highlights migrations (item #19), so today form == its activity half.
+    fc = form.form_count(ages, laurels=())
     return {"id": pid, "name": p["game_name"], "real_name": p["real_name"],
             "skill": round(ratings.skill(st, pid)), "skill_tier": ratings.tier(ratings.skill(st, pid)),
             "skill_n": ratings.skill_matches(st, pid), "skill_prov": ratings.skill_provisional(st, pid),
+            "form": fc, "form_band": form.form_band(fc),
             "singles": round(st["singles"].get(pid, START)), "singles_n": st["singles_n"].get(pid, 0),
             "singles_prov": st["singles_n"].get(pid, 0) < ratings.MIN_MATCHES,
             "doubles": round(st["doubles"].get(pid, START)), "doubles_n": st["doubles_n"].get(pid, 0),

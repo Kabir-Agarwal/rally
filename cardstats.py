@@ -68,6 +68,10 @@ def check():
     if c["skill"] != base or not c["skill_prov"] or c["skill_n"] != 0:
         bad.append(f"a brand-new player's skill rating is seeded/ranked: skill={c['skill']} prov={c['skill_prov']} "
                    f"n={c['skill_n']} (want {base}, provisional, 0 — the FIFA-card skill is earned from 0)")
+    # Y4 form count is the other card number: zero (Dormant) until activity/reputation is earned.
+    if c["form"] != 0 or c["form_band"] != "Dormant":
+        bad.append(f"a brand-new player's form count is non-zero: form={c['form']} band={c['form_band']!r} "
+                   f"(want 0/Dormant — the form count is earned from 0)")
 
     # 2. EARNED — one counted singles win moves the card off zero for BOTH players: the winner earns a
     #    W and a rating above baseline, the loser an L and a rating below it.
@@ -85,6 +89,11 @@ def check():
                    f"(want (0,1,['L'],1))")
     if cl["singles"] >= base:
         bad.append(f"loser rating {cl['singles']} did not drop below baseline {base}")
+    # Y4 form is earned by ACTIVITY: a just-played counted match is recent, so both players'
+    # form rises off zero (win or loss — form is presence, not result, unlike skill).
+    if cw["form"] <= 0 or cl["form"] <= 0:
+        bad.append(f"a fresh counted match left form at zero: winner={cw['form']} loser={cl['form']} "
+                   f"(recent activity must earn form)")
 
     # 3. EARNED ONLY FROM COUNTED PLAY — an unapproved (pending) match is not yet earned and puts
     #    NOTHING on the card. player_payload counts status='counted' only.

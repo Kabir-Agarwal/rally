@@ -1061,10 +1061,13 @@ function renderPlayer(ov, p) {
         ${p.real_name ? `<div class="pn-real">${esc(p.real_name)}</div>` : ''}</div></div>
       <div class="muted" style="margin-top:6px"><span class="wlchip wl-w">${p.wins}W</span>
         <span class="wlchip wl-l">${p.losses}L</span> · last 5: ${l5 || '—'}</div>
-      <div style="margin-top:10px"><div class="muted">Skill rating</div>
-        ${p.skill_prov
-          ? `<div style="font-size:24px;font-weight:900">Unranked</div><span class="pill">${p.skill_n} of 5</span>`
-          : `<div style="font-size:28px;font-weight:900">${esc(p.skill_tier)} <span style="opacity:.6;font-size:19px">${p.skill - 1200 >= 0 ? '+' : ''}${p.skill - 1200}</span></div>`}</div>
+      <div class="row" style="margin-top:10px">
+        <div class="setcol"><div class="muted">Skill rating</div>
+          ${p.skill_prov
+            ? `<div style="font-size:24px;font-weight:900">Unranked</div><span class="pill">${p.skill_n} of 5</span>`
+            : `<div style="font-size:28px;font-weight:900">${esc(p.skill_tier)} <span style="opacity:.6;font-size:19px">${p.skill - 1200 >= 0 ? '+' : ''}${p.skill - 1200}</span></div>`}</div>
+        <div class="setcol"><div class="muted">Form</div>
+          <div style="font-size:28px;font-weight:900">${esc(p.form_band)} <span style="opacity:.6;font-size:19px">${p.form}</span></div></div></div>
       <div class="row" style="margin-top:10px">
         <div class="setcol"><div class="muted">Singles</div><div style="font-size:22px;font-weight:900">${p.singles - 1200 >= 0 ? '+' : ''}${p.singles - 1200}</div>${p.singles_prov ? `<span class="pill">${p.singles_n} of 5</span>` : ''}</div>
         <div class="setcol"><div class="muted">Doubles</div><div style="font-size:22px;font-weight:900">${p.doubles - 1200 >= 0 ? '+' : ''}${p.doubles - 1200}</div>${p.doubles_prov ? `<span class="pill">${p.doubles_n} of 5</span>` : ''}</div></div></div>

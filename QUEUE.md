@@ -16,7 +16,7 @@
 - [x] 14. Add posts feed + followed players' matches  (SPEC: Y3)
 - [x] 15. Add org/club accounts  (SPEC: Y3)
 - [x] 16. Add public layer — privacy controls, block/report, location-permission handling, 16+ gate  (SPEC: Y3)
-- [ ] 17. Build Elo-style skill rating on the FIFA card  (SPEC: Y4)
+- [~] 17. Build Elo-style skill rating on the FIFA card  (SPEC: Y4)
 - [ ] 18. Build activity/reputation form count  (SPEC: Y4)
 - [ ] 19. Adopt batched migrations — one migrations/block-N.sql per feature-block, owner applies via Supabase MCP  (SPEC: Y5)
 - [ ] 20. Build Y6 Tier 1 video tool — rally segmentation, counts/lengths, highlight reel, movement heatmaps; laptop-only, upload stats JSON + clips  (SPEC: Y6)

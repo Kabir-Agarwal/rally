@@ -86,6 +86,7 @@ def preflight():
     import highlights
     import feed
     import orgs
+    import public
     blocks.validate()
     theme.check()                    # SPEC Y2 KEEP theme: abort if static/style.css :root drifted
     chemistry.check()                # SPEC Y2 KEEP doubles chemistry: abort if the pair contract regressed
@@ -100,6 +101,7 @@ def preflight():
     highlights.check()               # SPEC Y3 ADD highlights: abort if the landscape gate / reputation stars / laurels regressed
     feed.check()                     # SPEC Y3 ADD posts feed: abort if the directed follow graph / posts / merged timeline regressed
     orgs.check()                     # SPEC Y3 ADD org/club accounts: abort if the account profile / role graph / protected-owner invariant regressed
+    public.check()                   # SPEC Y3 ADD public layer: abort if the 16+ gate / privacy view policy / block-report / location-permission regressed
     importlib.import_module("app")   # boot check: raises if the app can't construct
     print("preflight OK")
 

@@ -66,7 +66,14 @@ REGISTRY = [
     # the batched migrations (item #19, SPEC Y5 — no session applies schema); block/report + private
     # accounts are item #16.
     {"id": "feed",         "label": "Feed",        "icon": "\U0001F4F0", "state": "dummy"},
-    {"id": "orgs",         "label": "Clubs",       "icon": "\U0001F3E2", "state": "off"},
+    # orgs/clubs: engine live (orgs.py — an account profile (name/@handle/kind trust guards) + a role
+    # graph OWNER > ADMIN > MEMBER whose one protected invariant is "exactly one owner always": found
+    # seeds it, add admits members, set_role is the owner granting/revoking admin, remove enforces
+    # self-leave + strict-rank, transfer is the only way ownership moves); screen lands as dummy UI
+    # (item #15). The accounts + memberships tables + the club profile / roster / manage controls
+    # follow with the batched migrations (item #19, SPEC Y5 — no session applies schema); who-may-see
+    # a club + block/report + the 16+ gate are item #16.
+    {"id": "orgs",         "label": "Clubs",       "icon": "\U0001F3E2", "state": "dummy"},
 ]
 
 CORE = ("live", "leaderboard", "log", "groups", "history")

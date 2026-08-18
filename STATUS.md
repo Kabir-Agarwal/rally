@@ -65,6 +65,7 @@ This is the **single planned pause** SPEC Y5 calls for — one card for the whol
 | block-13 | highlights (#13)        | `highlights`, `highlight_ratings` |
 | block-14 | posts feed (#14)        | `follows`, `posts` |
 | block-15 | org/club accounts (#15) | `accounts`, `memberships` |
+| block-16 | public layer (#16)      | `blocks`, `reports`, `accounts.visibility`, `players.dob`/`location_permission` |
 
 Items **#17 (skill rating)** and **#18 (form count)** need no schema — both recompute on read.
 

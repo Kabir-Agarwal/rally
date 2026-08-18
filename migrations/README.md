@@ -32,6 +32,7 @@ write block-N.sql  →  ONE planned ✋ in STATUS.md  →  owner applies each vi
 | 13 | highlights (#13)        | Y3 | `highlights`, `highlight_ratings` |
 | 14 | posts feed (#14)        | Y3 | `follows`, `posts` |
 | 15 | org/club accounts (#15) | Y3 | `accounts`, `memberships` |
+| 16 | public layer (#16)      | Y3 | `blocks`, `reports`, `accounts.visibility` (ALTERs block-15), `players.dob`/`location_permission` |
 
 **No schema needed:** #17 skill rating and #18 form count both **recompute on read** (from matches +
 laurels) — no table, nothing to apply. Laurels themselves derive from `highlight_ratings` (block 13).

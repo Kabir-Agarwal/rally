@@ -1,0 +1,12 @@
+# Y6 Tier-1 video tool — LAPTOP-ONLY deps (SPEC Y6: laptop-only processing).
+# NOT in requirements.txt on purpose: the deployed web app (Vercel free tier) never runs the vision
+# pipeline, and opencv/numpy would bloat/break that bundle. video.py lazy-imports these only inside the
+# laptop adapter (extract_signal/process_video), so the app and deploy.py preflight stay dependency-free.
+#
+#   pip install -r requirements-video.txt
+#
+# Free open-source vision libraries only (owner ruling, 14 Aug 2026 — anything paid -> cost card).
+opencv-python
+numpy
+# Highlight-clip cutting also uses ffmpeg (a system binary, not pip) if it is on PATH; without it the
+# reel SPANS are still written to stats.json for the owner to cut. Install from https://ffmpeg.org/.

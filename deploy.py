@@ -88,6 +88,7 @@ def preflight():
     import feed
     import orgs
     import public
+    import video
     from migrations import check_migrations
     blocks.validate()
     check_migrations.check()         # SPEC Y5: abort if the batched-migrations convention or the no-session-applies-schema invariant regressed
@@ -106,6 +107,7 @@ def preflight():
     feed.check()                     # SPEC Y3 ADD posts feed: abort if the directed follow graph / posts / merged timeline regressed
     orgs.check()                     # SPEC Y3 ADD org/club accounts: abort if the account profile / role graph / protected-owner invariant regressed
     public.check()                   # SPEC Y3 ADD public layer: abort if the 16+ gate / privacy view policy / block-report / location-permission regressed
+    video.check()                    # SPEC Y6 Tier-1 video tool: abort if rally segmentation / counts-lengths / highlight reel / movement heatmaps regressed
     importlib.import_module("app")   # boot check: raises if the app can't construct
     print("preflight OK")
 

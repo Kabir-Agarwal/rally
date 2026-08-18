@@ -33,9 +33,11 @@ write block-N.sql  →  ONE planned ✋ in STATUS.md  →  owner applies each vi
 | 14 | posts feed (#14)        | Y3 | `follows`, `posts` |
 | 15 | org/club accounts (#15) | Y3 | `accounts`, `memberships` |
 | 16 | public layer (#16)      | Y3 | `blocks`, `reports`, `accounts.visibility` (ALTERs block-15), `players.dob`/`location_permission` |
+| 20 | Y6 Tier-1 video (#20)   | Y6 | `video_stats` (the laptop tool's stats JSON; clips reuse `highlights`) |
 
 **No schema needed:** #17 skill rating and #18 form count both **recompute on read** (from matches +
 laurels) — no table, nothing to apply. Laurels themselves derive from `highlight_ratings` (block 13).
+#19 **adopted** this convention (it staged blocks 9–16); it added no table of its own.
 
 Each block's screen stays **dummy UI** (SPEC Y1) until its block is applied, then flips dummy → live
 in its own wiring item — so a partly-built feature never touches production.

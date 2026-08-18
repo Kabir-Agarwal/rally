@@ -51,5 +51,6 @@ def test_dummy_block_renders_and_injects(app_client):
 
 
 def test_off_and_unknown_blocks_404(app_client):
-    assert app_client.get("/nearby").status_code == 404    # declared but still `off`
+    off = next(b["id"] for b in blocks.REGISTRY if b["state"] == "off")   # e.g. messages/feed/orgs
+    assert app_client.get("/" + off).status_code == 404    # declared but still `off`
     assert app_client.get("/nope").status_code == 404      # unknown segment

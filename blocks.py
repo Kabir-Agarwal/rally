@@ -40,7 +40,11 @@ REGISTRY = [
     # league engines); screen lands as dummy UI (item #10). Persistence + Create/Manage forms follow
     # with the batched migrations (item #19, SPEC Y5 — no session applies schema).
     {"id": "competitions", "label": "Compete",     "icon": "⚔️", "state": "dummy"},
-    {"id": "nearby",       "label": "Nearby",      "icon": "\U0001F4CD", "state": "off"},
+    # nearby: engine live (nearby.py — 50km haversine radius, antimeridian-safe; Connect request
+    # lifecycle pending->accepted in the friendships shape); screen lands as dummy UI (item #11).
+    # Player location (lat/lng, discoverable opt-in) + the connections table follow with the batched
+    # migrations (item #19, SPEC Y5 — no session applies schema); privacy/permission are item #16.
+    {"id": "nearby",       "label": "Nearby",      "icon": "\U0001F4CD", "state": "dummy"},
     {"id": "messages",     "label": "Messages",    "icon": "\U0001F4AC", "state": "off"},
     {"id": "highlights",   "label": "Highlights",  "icon": "\U0001F3AC", "state": "off"},
     {"id": "feed",         "label": "Feed",        "icon": "\U0001F4F0", "state": "off"},

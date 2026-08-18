@@ -35,7 +35,11 @@ REGISTRY = [
     # tiebreak); screen lands as dummy UI (item #8). Create/Manage + persistence follow with the
     # competitions hub (item #10).
     {"id": "leagues",      "label": "Leagues",     "icon": "\U0001F3BD", "state": "dummy"},
-    {"id": "competitions", "label": "Compete",     "icon": "⚔️", "state": "off"},
+    # competitions: engine live (competitions.py — lifecycle draft->open->scheduled->live->completed,
+    # the four hub sections Create/In-Queue/Scheduled/Manage, start() dispatches to the tournament/
+    # league engines); screen lands as dummy UI (item #10). Persistence + Create/Manage forms follow
+    # with the batched migrations (item #19, SPEC Y5 — no session applies schema).
+    {"id": "competitions", "label": "Compete",     "icon": "⚔️", "state": "dummy"},
     {"id": "nearby",       "label": "Nearby",      "icon": "\U0001F4CD", "state": "off"},
     {"id": "messages",     "label": "Messages",    "icon": "\U0001F4AC", "state": "off"},
     {"id": "highlights",   "label": "Highlights",  "icon": "\U0001F3AC", "state": "off"},

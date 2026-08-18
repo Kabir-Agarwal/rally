@@ -51,7 +51,13 @@ REGISTRY = [
     # batched migrations (item #19, SPEC Y5 — no session applies schema); block/report + DM gating are
     # item #16. "Advanced messenger AI" stays v2 (SPEC OUT).
     {"id": "messages",     "label": "Messages",    "icon": "\U0001F4AC", "state": "dummy"},
-    {"id": "highlights",   "label": "Highlights",  "icon": "\U0001F3AC", "state": "off"},
+    # highlights: engine live (highlights.py — landscape upload gate: portrait/square/oversize/over-long
+    # refused with a reason; 1–5★ reputation, one vote per viewer, no self-rating; laurels none->bronze->
+    # silver->gold earned over a votes floor); screen lands as dummy UI (item #13). The highlights +
+    # ratings tables + the upload form / player / star bar / laurel badge follow with the batched
+    # migrations (item #19, SPEC Y5 — no session applies schema); block/report + 16+ gate are item #16.
+    # Video *processing* (rally segmentation / reel / heatmaps) is the Y6 laptop-only tool (items #20–21).
+    {"id": "highlights",   "label": "Highlights",  "icon": "\U0001F3AC", "state": "dummy"},
     {"id": "feed",         "label": "Feed",        "icon": "\U0001F4F0", "state": "off"},
     {"id": "orgs",         "label": "Clubs",       "icon": "\U0001F3E2", "state": "off"},
 ]

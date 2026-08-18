@@ -12,7 +12,7 @@
 - [x] 10. Add competitions hub — Create/Manage/In-Queue/Scheduled  (SPEC: Y3)
 - [x] 11. Add nearby players — 50km + Connect  (SPEC: Y3)
 - [x] 12. Add messenger + basic AI helper  (SPEC: Y3)
-- [ ] 13. Add highlights — landscape video upload, reputation stars, laurels  (SPEC: Y3)
+- [~] 13. Add highlights — landscape video upload, reputation stars, laurels  (SPEC: Y3)
 - [ ] 14. Add posts feed + followed players' matches  (SPEC: Y3)
 - [ ] 15. Add org/club accounts  (SPEC: Y3)
 - [ ] 16. Add public layer — privacy controls, block/report, location-permission handling, 16+ gate  (SPEC: Y3)

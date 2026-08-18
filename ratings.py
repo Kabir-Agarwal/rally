@@ -204,6 +204,49 @@ def is_provisional(state, mode, pid):
     return state[mode + "_n"].get(pid, 0) < MIN_MATCHES
 
 
+# --- Y4: single Elo-style skill rating for the FIFA card -------------------
+# The card's headline number. ONE skill from all counted play: the player's
+# singles & doubles Elo blended by how many counted matches fed each mode.
+# Unplayed modes contribute nothing; a player with no counted match sits at
+# START and reads provisional (earned-from-0, same MIN_MATCHES gate). Named
+# tiers band the raw number so the card reads like a FIFA card.
+# ponytail: tiers are display-only bands over the 0-based (Elo-START) number;
+# tune the thresholds, the underlying rating stays raw Elo.
+SKILL_TIERS = [(0, "Challenger"), (50, "Competitor"), (100, "Advanced"),
+               (175, "Expert"), (250, "Elite")]
+
+
+def skill_matches(state, pid):
+    """Counted matches feeding the skill rating (singles + doubles)."""
+    return state["singles_n"].get(pid, 0) + state["doubles_n"].get(pid, 0)
+
+
+def skill(state, pid):
+    """Single Elo-style skill rating: the player's singles & doubles Elo blended
+    by counted-match volume. START when nothing counted has been played."""
+    sn = state["singles_n"].get(pid, 0)
+    dn = state["doubles_n"].get(pid, 0)
+    n = sn + dn
+    if n == 0:
+        return START
+    s = state["singles"].get(pid, START)
+    d = state["doubles"].get(pid, START)
+    return (s * sn + d * dn) / n
+
+
+def skill_provisional(state, pid):
+    return skill_matches(state, pid) < MIN_MATCHES
+
+
+def tier(rating):
+    """Named skill tier banded over the raw Elo skill number (Rookie→Elite)."""
+    name = "Rookie"  # net-losing / below the shared baseline
+    for floor, label in SKILL_TIERS:
+        if rating - START >= floor:
+            name = label
+    return name
+
+
 # ---------------------------------------------------------------------------
 def _demo():
     """Runnable self-check. `python ratings.py` must print OK."""
@@ -283,6 +326,27 @@ def _demo():
     s_a = rebuild(matches)
     s_b = rebuild(matches)
     assert s_a["singles"] == s_b["singles"]
+
+    # Y4 skill rating: earned from 0, blended across modes, tier-banded.
+    st = new_state()
+    assert skill(st, "z") == START and skill_provisional(st, "z"), "unplayed: baseline + provisional"
+    assert tier(START) == "Challenger" and tier(START - 1) == "Rookie"
+    assert tier(START + 250) == "Elite" and tier(START + 120) == "Advanced"
+    # singles-only player: skill == singles Elo (doubles never played contributes nothing)
+    st = new_state()
+    for _ in range(5):
+        apply_match(st, {"kind": "singles", "side1": ["a"], "side2": ["b"], "sets": [(6, 4)]})
+    assert abs(skill(st, "a") - st["singles"]["a"]) < 1e-9, "no doubles -> skill is singles Elo"
+    assert not skill_provisional(st, "a"), "5 counted -> ranked skill"
+    assert skill(st, "a") > START and tier(skill(st, "a")) != "Rookie"
+    # blend weights by counted-match volume: 3 singles wins + 1 doubles loss
+    st = new_state()
+    for _ in range(3):
+        apply_match(st, {"kind": "singles", "side1": ["a"], "side2": ["b"], "sets": [(6, 4)]})
+    apply_match(st, {"kind": "doubles", "side1": ["a", "c"], "side2": ["d", "e"], "sets": [(4, 6)]})
+    exp = (st["singles"]["a"] * 3 + st["doubles"]["a"] * 1) / 4
+    assert abs(skill(st, "a") - exp) < 1e-9, "skill = match-weighted blend of the two modes"
+    assert skill_matches(st, "a") == 4 and skill_provisional(st, "a"), "4 counted -> still provisional"
 
     print("OK ratings")
 

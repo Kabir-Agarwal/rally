@@ -64,6 +64,10 @@ def check():
                    f"(want {base} — card stats are earned from 0, never assigned)")
     if not (c["singles_prov"] and c["doubles_prov"]):
         bad.append("a brand-new player is not provisional (an unearned rating must not read as ranked)")
+    # Y4 skill rating is a card number too: earned from 0, never seeded, provisional until ranked.
+    if c["skill"] != base or not c["skill_prov"] or c["skill_n"] != 0:
+        bad.append(f"a brand-new player's skill rating is seeded/ranked: skill={c['skill']} prov={c['skill_prov']} "
+                   f"n={c['skill_n']} (want {base}, provisional, 0 — the FIFA-card skill is earned from 0)")
 
     # 2. EARNED — one counted singles win moves the card off zero for BOTH players: the winner earns a
     #    W and a rating above baseline, the loser an L and a rating below it.
@@ -124,6 +128,8 @@ def check():
     if card(con, w)["singles_prov"]:
         bad.append(f"a rating is still provisional at {ratings.MIN_MATCHES} earned matches "
                    f"(want ranked at {ratings.MIN_MATCHES})")
+    if card(con, w)["skill_prov"]:
+        bad.append(f"the skill rating is still provisional at {ratings.MIN_MATCHES} counted matches (want ranked)")
 
     if bad:
         raise ValueError("earned-from-0 card stats regressed:\n  " + "\n  ".join(bad))

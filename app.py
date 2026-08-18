@@ -676,6 +676,8 @@ def player_payload(con, gid, pid):
             last5.append("W" if won else "L")
         hist.append(v)
     return {"id": pid, "name": p["game_name"], "real_name": p["real_name"],
+            "skill": round(ratings.skill(st, pid)), "skill_tier": ratings.tier(ratings.skill(st, pid)),
+            "skill_n": ratings.skill_matches(st, pid), "skill_prov": ratings.skill_provisional(st, pid),
             "singles": round(st["singles"].get(pid, START)), "singles_n": st["singles_n"].get(pid, 0),
             "singles_prov": st["singles_n"].get(pid, 0) < ratings.MIN_MATCHES,
             "doubles": round(st["doubles"].get(pid, START)), "doubles_n": st["doubles_n"].get(pid, 0),

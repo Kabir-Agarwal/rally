@@ -5,7 +5,7 @@
 - [x] 3. Keep the theme  (SPEC: Y2)
 - [x] 4. Keep doubles chemistry  (SPEC: Y2)
 - [x] 5. Keep delete-past-matches  (SPEC: Y2)
-- [~] 6. Keep earned-from-0 card stats  (SPEC: Y2)
+- [x] 6. Keep earned-from-0 card stats  (SPEC: Y2)
 - [ ] 7. Add tournaments — 4–32 draws, BYEs, live brackets  (SPEC: Y3)
 - [ ] 8. Add round-robin leagues  (SPEC: Y3)
 - [ ] 9. Add practice-vs-rated split  (SPEC: Y3)

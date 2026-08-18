@@ -79,6 +79,7 @@ def preflight():
     import cardstats
     import tournaments
     import leagues
+    import practice
     blocks.validate()
     theme.check()                    # SPEC Y2 KEEP theme: abort if static/style.css :root drifted
     chemistry.check()                # SPEC Y2 KEEP doubles chemistry: abort if the pair contract regressed
@@ -86,6 +87,7 @@ def preflight():
     cardstats.check()                # SPEC Y2 KEEP earned-from-0 card stats: abort if the card is seeded / mis-counted
     tournaments.check()              # SPEC Y3 ADD tournaments: abort if the bracket engine (4–32, BYEs, live) regressed
     leagues.check()                  # SPEC Y3 ADD round-robin leagues: abort if the schedule/standings engine regressed
+    practice.check()                 # SPEC Y3 ADD practice-vs-rated split: abort if practice leaks into the rating
     importlib.import_module("app")   # boot check: raises if the app can't construct
     print("preflight OK")
 

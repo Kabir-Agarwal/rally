@@ -2,7 +2,7 @@
 
 - [x] 1. Item #0: re-study Playeri for steal-worthy features, run the reuse-audit, verify Vercel/Supabase free-tier headroom  (SPEC: Y7)
 - [x] 2. Lock prod-safe delivery: block-by-block, dummy UI on new screens  (SPEC: Y1)
-- [ ] 3. Keep the theme  (SPEC: Y2)
+- [~] 3. Keep the theme  (SPEC: Y2)
 - [ ] 4. Keep doubles chemistry  (SPEC: Y2)
 - [ ] 5. Keep delete-past-matches  (SPEC: Y2)
 - [ ] 6. Keep earned-from-0 card stats  (SPEC: Y2)

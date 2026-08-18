@@ -29,12 +29,17 @@
     <button data-tab="log"         onclick="switchTab('log')"><span class="ic">✏️</span>Create Game</button>
     <button data-tab="groups"      onclick="switchTab('groups')"><span class="ic">👥</span>Groups</button>
     <button data-tab="history"     onclick="switchTab('history')"><span class="ic">👤</span>Profile<span class="tabbadge" id="apprBadge" hidden></span></button>
+    {# New screens landing as dummy UI (SPEC Y1). Which appear is decided by blocks.py; empty in prod today. #}
+    {% for b in dummy_blocks %}
+    <button data-tab="{{ b.id }}" onclick="switchTab('{{ b.id }}')"><span class="ic">{{ b.icon }}</span>{{ b.label }}</button>
+    {% endfor %}
   </nav>
   <script>
     {# A group is only ever a FILTER; null = everything the signed-in player has. #}
     window.GROUP = {% if g %}{code:"{{ g.code }}", name:"{{ g.name|e }}", is_public:{{ 'true' if g.is_public else 'false' }}}{% else %}null{% endif %};
     window.FILTER = window.GROUP ? window.GROUP.code : null;
     window.INIT = {tab:"{{ tab }}", player:{% if player %}"{{ player }}"{% else %}null{% endif %}};
+    window.DUMMY_BLOCKS = {{ dummy_blocks|tojson }};   {# SPEC Y1: dummy screens app.js registers #}
     window.PAGE = "spa";
   </script>
 </div>

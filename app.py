@@ -19,6 +19,7 @@ import scoring
 import ratings
 import auth
 import auth_playerid
+import blocks
 from ratings import START
 
 BASE = Path(__file__).parent
@@ -458,7 +459,8 @@ def _shell(request, tab, group=None, player=None):
         g = db.group_by_code(con, group)
         con.close()
     return templates.TemplateResponse(request, "shell.html",
-                                      {"g": (dict(g) if g else None), "tab": tab, "player": player})
+                                      {"g": (dict(g) if g else None), "tab": tab, "player": player,
+                                       "dummy_blocks": blocks.dummy_blocks()})
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1155,3 +1157,14 @@ async def admin_reset_password(pid: str, request: Request):
     finally:
         con.close()
     return {"ok": True}
+
+
+# --- feature-block dummy screens (SPEC Y1) -------------------------------------------------
+# Deep-link / fresh-load for a new screen still landing as dummy UI. Defined LAST so every
+# explicit route above (/, /live, /admin, ...) wins; this only ever serves a block in `dummy`
+# and 404s anything else, so it can never shadow a real page.
+@app.get("/{block}", response_class=HTMLResponse)
+def page_block(request: Request, block: str):
+    if block not in {b["id"] for b in blocks.dummy_blocks()}:
+        raise HTTPException(status_code=404)
+    return _shell(request, block)

@@ -1112,6 +1112,17 @@ const TAB_INIT = {
   groups: (r) => initGroups(r), history: (r) => initHistory(r),
 };
 const TAB_URL = { live: "live", leaderboard: "leaderboard", log: "log", groups: "groups", history: "history" };
+// SPEC Y1: feature-blocks still landing show as *dummy UI* — a nav tab (from shell.html) + a
+// "Coming soon" panel, no real logic. blocks.py decides which via window.DUMMY_BLOCKS. Registering
+// the id makes the tab routable and gives it a placeholder skeleton; with no TAB_INIT entry,
+// renderTab just shows that skeleton and does nothing else. Empty in prod today -> a no-op.
+(window.DUMMY_BLOCKS || []).forEach(b => {
+  TAB_URL[b.id] = b.id;
+  TAB_SKELETONS[b.id] = `<div class="card" style="text-align:center;margin-top:24px">
+    <div style="font-size:32px">${b.icon || "🎾"}</div>
+    <div style="font-weight:800;margin-top:6px">${b.label}</div>
+    <div class="muted" style="margin-top:6px">Coming soon</div></div>`;
+});
 const PANELS = {};
 let CURRENT_TAB = null;
 

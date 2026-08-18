@@ -65,7 +65,19 @@ def get(url):
     return json.loads(urllib.request.urlopen(req, timeout=60).read())
 
 
+def preflight():
+    """Prod-safe gate (SPEC Y1): never upload a build that can't boot or whose feature-block
+    registry is inconsistent. Importing app runs db.init_db (fails loud if unmigrated); then the
+    block registry is validated. Any failure aborts the deploy before a single file is uploaded."""
+    import importlib
+    import blocks
+    blocks.validate()
+    importlib.import_module("app")   # boot check: raises if the app can't construct
+    print("preflight OK")
+
+
 def main():
+    preflight()
     files = collect_files()
     print(f"uploading {len(files)} files…")
     body = {

@@ -5,6 +5,37 @@ can make (money, or a spec clarification). Sessions never spend and never guess 
 
 ---
 
+## ✋ WAITING-OWNER — VALIDATE: Y6 Tier 2 is gated on your real Stage-0 clip
+
+Raised by item #21 (SPEC Y6). Verify the gate with `python stage0.py` (deps-free self-check).
+
+**Why this needs you.** SPEC Y6 + your 14 Aug ruling: *Tier 2 (deeper ball/player vision) only after your
+**real** Stage-0 clip validates.* Item #20's Tier-1 tool measures rallies from a simple **frame-diff**
+signal whose accuracy on real footage is **unproven** — Stage-0 is the test that proves it before we
+invest in Tier 2. A build session **cannot** produce a real match video (nothing to film, and the money
+wall bars any paid capture/footage), so this is yours to run. **The gate is already built and closed**:
+`stage0.require_tier2_unlocked()` raises until a genuine passing verdict exists, so no session can start
+Tier 2 in the meantime.
+
+**Do it (a few minutes, laptop-only, free):**
+1. Film a short **real** clip — tripod, landscape, whole court in frame (the tool's own capture guidance).
+   A couple of minutes with a handful of rallies is plenty.
+2. Watch it and hand-label each rally's start/end into a small JSON (`m:ss` or seconds both work):
+   `{ "rallies": [ {"start_s":"0:04","end_s":"0:11"}, {"start_s":"0:19","end_s":"0:28"} ] }`
+3. `pip install -r requirements-video.txt` then `python stage0.py your-clip.mp4 labels.json`.
+
+**Outcomes — this decides Tier 2, not money:**
+- **PASS** → `stage0_verdict.json` is written and Tier 2 unlocks; a later item can build deeper vision.
+- **FAIL** → the frame-diff signal isn't accurate enough yet; Tier 2 would be built on sand. That's the
+  honest signal to hold Tier 2 until a better detector exists — exactly what Stage-0 is for. Re-run any
+  time; the bar (`recall/precision/mean-IoU`) is in `stage0.THRESHOLDS` and can only be tightened, not
+  cheated (the verdict is git-ignored and the gate recomputes pass/fail from the recorded numbers).
+
+**Blocking?** No — item #21's job was to *build the gate*, which is done and enforced in preflight. This
+card gates the future Tier-2 build step, not any Y1–Y5 / Y7 work. Details: `docs/item-21-stage0-gate.md`.
+
+---
+
 ## ✋ WAITING-OWNER — COST CARD: going public outgrows the free tier
 
 Raised by item #0 (SPEC Y7). Verified with `freetier_check.py` (`python freetier_check.py`).

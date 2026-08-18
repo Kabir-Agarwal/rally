@@ -44,6 +44,38 @@ future go-public/upgrade step, not the Y1–Y5 build.
 
 ---
 
+## ✋ WAITING-OWNER — APPLY: batched feature-block migrations (SPEC Y5)
+
+Raised by item #19. Verify with `python migrations/check_migrations.py`.
+
+The Y3/Y4 feature **engines are built and preflight-gated**, but their screens stay **dummy** (SPEC
+Y1) until their tables exist. SPEC Y5: **no build session applies schema** — the migrations are
+staged as `migrations/block-N.sql` (`PROPOSED / NOT APPLIED`) for you to apply via the **Supabase
+MCP** (`apply_migration`), in order, then each screen flips dummy → live in its own wiring item.
+This is the **single planned pause** SPEC Y5 calls for — one card for the whole batch.
+
+**Apply in order, after `2026-07-27_identity_foundation.sql`:**
+
+| Block | Feature (item) | Adds |
+|------:|----------------|------|
+| block-9  | practice-vs-rated (#9)  | `matches.mode` |
+| block-10 | competitions hub (#10)  | `competitions`, `competition_entrants` |
+| block-11 | nearby (#11)            | `players.lat/lng/discoverable` (connections reuse `friendships`) |
+| block-12 | messenger (#12)         | `messages` |
+| block-13 | highlights (#13)        | `highlights`, `highlight_ratings` |
+| block-14 | posts feed (#14)        | `follows`, `posts` |
+| block-15 | org/club accounts (#15) | `accounts`, `memberships` |
+
+Items **#17 (skill rating)** and **#18 (form count)** need no schema — both recompute on read.
+
+Every file is **additive + idempotent** (`IF NOT EXISTS`): existing rows/columns are untouched, so
+prod never breaks, and a re-apply is safe. **Sessions never run these.**
+
+**Blocking?** No — item #19's job was to *adopt the convention and stage the batch*, which is done.
+This card gates the owner's apply step, not the build.
+
+---
+
 ## ✋ WAITING-OWNER — CLARIFY: what is "Playeri"?
 
 Raised by item #0 (SPEC Y7 says "re-study current **Playeri**").

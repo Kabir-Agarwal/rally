@@ -88,7 +88,9 @@ def preflight():
     import feed
     import orgs
     import public
+    from migrations import check_migrations
     blocks.validate()
+    check_migrations.check()         # SPEC Y5: abort if the batched-migrations convention or the no-session-applies-schema invariant regressed
     theme.check()                    # SPEC Y2 KEEP theme: abort if static/style.css :root drifted
     chemistry.check()                # SPEC Y2 KEEP doubles chemistry: abort if the pair contract regressed
     deletion.check()                 # SPEC Y2 KEEP delete-past-matches: abort if soft delete / rollback regressed

@@ -67,14 +67,17 @@ def get(url):
 
 def preflight():
     """Prod-safe gate (SPEC Y1): never upload a build that can't boot, whose feature-block registry
-    is inconsistent, or that regresses the approved theme (SPEC Y2). Importing app runs db.init_db
-    (fails loud if unmigrated); the block registry and theme palette are validated. Any failure
-    aborts the deploy before a single file is uploaded."""
+    is inconsistent, or that regresses the approved theme or doubles chemistry (SPEC Y2). Importing
+    app runs db.init_db (fails loud if unmigrated); the block registry, theme palette and the
+    pair-rating contract are validated. Any failure aborts the deploy before a single file is
+    uploaded."""
     import importlib
     import blocks
     import theme
+    import chemistry
     blocks.validate()
     theme.check()                    # SPEC Y2 KEEP theme: abort if static/style.css :root drifted
+    chemistry.check()                # SPEC Y2 KEEP doubles chemistry: abort if the pair contract regressed
     importlib.import_module("app")   # boot check: raises if the app can't construct
     print("preflight OK")
 
